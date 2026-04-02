@@ -1,0 +1,10 @@
+services:
+  tengu:
+    volumes:
+      - ./tengu.toml:/app/tengu.toml:ro
+  dvwa:
+    ports:
+      - "4280:80"
+  juice-shop:
+    ports:
+      - "3000:3000"

@@ -18,6 +18,7 @@ ARG TENGU_TIER
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip curl git ca-certificates golang-go \
+    gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager)
