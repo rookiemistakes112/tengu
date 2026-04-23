@@ -30,12 +30,14 @@ if [[ -n "${TENGU_ALLOWED_HOSTS:-}" ]]; then
     echo -e "${YELLOW}[config]${NC} TENGU_ALLOWED_HOSTS override: ${TENGU_ALLOWED_HOSTS}"
 fi
 
-# ── Update Nuclei templates (best-effort, skip if offline) ─────────────────────
+# ── Update Nuclei templates in background (best-effort, skip if offline) ────────
+# Runs in background so the MCP server starts immediately.
+# Templates are already baked into the image — this just keeps them current.
 if command -v nuclei &>/dev/null; then
-    echo -e "${BLUE}[nuclei]${NC} Updating templates..."
-    nuclei -update-templates -silent 2>/dev/null && \
+    echo -e "${BLUE}[nuclei]${NC} Updating templates in background..."
+    (nuclei -update-templates -silent 2>/dev/null && \
         echo -e "${GREEN}[nuclei]${NC} Templates updated" || \
-        echo -e "${YELLOW}[nuclei]${NC} Template update skipped (offline?)"
+        echo -e "${YELLOW}[nuclei]${NC} Template update skipped (offline?)") &
 fi
 
 # ── Quick tool health check ─────────────────────────────────────────────────────
