@@ -129,6 +129,7 @@ from tengu.tools.recon.gowitness import gowitness_screenshot
 from tengu.tools.recon.httpx_probe import httpx_probe
 from tengu.tools.recon.httrack import httrack_mirror
 from tengu.tools.recon.katana import katana_crawl
+from tengu.tools.recon.waybackurls import waybackurls_fetch
 from tengu.tools.recon.masscan import masscan_scan
 from tengu.tools.recon.nmap import nmap_scan
 from tengu.tools.recon.rustscan import rustscan_scan
@@ -240,6 +241,7 @@ mcp.tool()(httrack_mirror)
 
 # Recon tools (v0.3)
 mcp.tool()(katana_crawl)
+mcp.tool()(waybackurls_fetch)
 mcp.tool()(httpx_probe)
 mcp.tool()(snmpwalk_scan)
 mcp.tool()(rustscan_scan)

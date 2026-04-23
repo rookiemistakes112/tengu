@@ -40,10 +40,19 @@ RUN mkdir -p /root/go/bin && \
             "github.com/projectdiscovery/katana/cmd/katana@v1.1.0" \
             "github.com/projectdiscovery/httpx/cmd/httpx@v1.6.9" \
             "github.com/projectdiscovery/dnsx/cmd/dnsx@v1.2.1" \
-            "github.com/lc/crlfuzz@v1.4.1"; \
+            "github.com/lc/crlfuzz@v1.4.1" \
+            "github.com/tomnomnom/waybackurls@latest"; \
         do \
             go install "$pkg" || echo "WARNING: failed to install $pkg, skipping"; \
         done; \
+    fi
+
+# Download Nuclei templates at build time so they're baked into the image.
+# The entrypoint still runs -update-templates on startup (best-effort), but
+# baking them in means the container works even if it has no internet access.
+RUN if [ "$TENGU_TIER" = "core" ] || [ "$TENGU_TIER" = "full" ]; then \
+        /root/go/bin/nuclei -update-templates 2>&1 \
+            || echo "WARNING: nuclei template download failed during build"; \
     fi
 
 # Cache Python dependencies separately from source code
@@ -132,6 +141,12 @@ COPY --from=builder /app/.venv /app/.venv
 
 # ── Copy Go binaries from builder (core and full tiers) ─────────────────────
 COPY --from=builder /root/go/bin/ /usr/local/bin/
+
+# ── Copy Nuclei templates baked during build ─────────────────────────────────
+# Baked templates prevent a cold-start failure when the container has no
+# internet access. The entrypoint still runs -update-templates on startup
+# so templates stay current across restarts.
+COPY --from=builder /root/nuclei-templates /root/nuclei-templates
 
 # ── Copy application source ──────────────────────────────────────────────────
 COPY --from=builder /app /app
