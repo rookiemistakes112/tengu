@@ -79,7 +79,7 @@ async def nuclei_scan(
         tool_path,
         "-u",
         target,
-        "-json",
+        "-jsonl",   # nuclei v3 uses -jsonl, not -json
         "-silent",
         "-severity",
         ",".join(effective_severity),
