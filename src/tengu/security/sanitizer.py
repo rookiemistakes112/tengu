@@ -17,6 +17,10 @@ from tengu.exceptions import InvalidInputError
 # Defense-in-depth: since we never use shell=True, but we still validate explicitly.
 _SHELL_METACHARACTERS = re.compile(r"[;&|`$<>()\{\}\[\]!\\\'\"\r\n]")
 
+# URL-safe variant: & is a valid query-parameter separator in URLs (RFC 3986)
+# and is harmless when passed as a subprocess arg (no shell=True ever used).
+_URL_SHELL_METACHARACTERS = re.compile(r"[;|`$<>()\{\}\[\]!\\\'\"\r\n]")
+
 # Valid hostname pattern (RFC 1123)
 _HOSTNAME_PATTERN = re.compile(
     r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*"
@@ -91,7 +95,7 @@ def sanitize_url(value: str) -> str:
     """Validate and sanitize a URL target."""
     value = value.strip()
 
-    if _SHELL_METACHARACTERS.search(value):
+    if _URL_SHELL_METACHARACTERS.search(value):
         raise InvalidInputError("url", value, "contains forbidden shell metacharacters")
 
     try:
