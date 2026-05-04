@@ -34,6 +34,8 @@ async def katana_crawl(
     depth: int = 3,
     concurrency: int = 10,
     js_crawl: bool = False,
+    form_extraction: bool = False,
+    cookie: str = "",
     timeout: int | None = None,
 ) -> dict:
     """Crawl a web application to discover endpoints and URLs using Katana.
@@ -46,6 +48,10 @@ async def katana_crawl(
         depth: Maximum crawl depth (default 3, max 10).
         concurrency: Number of concurrent requests (default 10, max 50).
         js_crawl: Enable JavaScript crawling for SPA applications.
+        form_extraction: Enable form field extraction (-form flag). Discovers
+            hidden inputs, POST endpoints, and login/search forms that link
+            crawling alone cannot find.
+        cookie: Session cookie for authenticated crawling (e.g. "PHPSESSID=abc123").
         timeout: Override scan timeout in seconds.
 
     Returns:
@@ -65,6 +71,8 @@ async def katana_crawl(
         "depth": depth,
         "concurrency": concurrency,
         "js_crawl": js_crawl,
+        "form_extraction": form_extraction,
+        "cookie": cookie,
     }
 
     target = sanitize_target(target)
@@ -92,6 +100,13 @@ async def katana_crawl(
 
     if js_crawl:
         args.append("-jc")
+
+    if form_extraction:
+        args.append("-form")
+
+    if cookie:
+        sanitized_cookie = cookie.replace("\r", "").replace("\n", "").replace("\x00", "")
+        args.extend(["-H", f"Cookie: {sanitized_cookie}"])
 
     from tengu.stealth import get_stealth_layer
 
@@ -124,6 +139,7 @@ async def katana_crawl(
         "depth": depth,
         "concurrency": concurrency,
         "js_crawl": js_crawl,
+        "authenticated": bool(cookie),
         "duration_seconds": round(duration, 2),
         "urls_found": len(urls),
         "urls": urls,
