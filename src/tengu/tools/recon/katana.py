@@ -102,7 +102,7 @@ async def katana_crawl(
         args.append("-jc")
 
     if form_extraction:
-        args.append("-form")
+        args.append("-aff")  # automatic form fill — discovers POST endpoints by submitting forms
 
     if cookie:
         sanitized_cookie = cookie.replace("\r", "").replace("\n", "").replace("\x00", "")
