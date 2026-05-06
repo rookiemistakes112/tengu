@@ -134,6 +134,16 @@ RUN if [ "$TENGU_TIER" = "full" ]; then \
         rm -rf /var/lib/apt/lists/* /root/.cache/pip; \
     fi
 
+# ── SSRFmap (core + full): SSRF detection tool by swisskyrepo ───────────────
+RUN if [ "$TENGU_TIER" = "core" ] || [ "$TENGU_TIER" = "full" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends git \
+            && rm -rf /var/lib/apt/lists/*; \
+        git clone --depth=1 https://github.com/swisskyrepo/SSRFmap /opt/SSRFmap \
+            && python3 -m pip install --break-system-packages \
+               -r /opt/SSRFmap/requirements.txt \
+            || echo "WARNING: SSRFmap install failed, skipping"; \
+    fi
+
 # ── Copy uv and Python virtualenv from builder ──────────────────────────────
 COPY --from=builder /root/.local/bin/uv /root/.local/bin/uv
 COPY --from=builder /root/.local/bin/uvx /root/.local/bin/uvx

@@ -1,102 +1,87 @@
-"""SSRF (Server-Side Request Forgery) testing tool — pure Python httpx implementation."""
+"""SSRF testing tool — wraps SSRFmap by swisskyrepo.
+
+SSRFmap: https://github.com/swisskyrepo/SSRFmap
+Installed at /opt/SSRFmap/ssrfmap.py inside the Tengu Kali container.
+"""
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 import time
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-import httpx
 import structlog
 from fastmcp import Context
 
+from tengu.config import get_config
+from tengu.executor.process import run_command
 from tengu.security.allowlist import make_allowlist_from_config
 from tengu.security.audit import get_audit_logger
 from tengu.security.sanitizer import sanitize_url
 
 logger = structlog.get_logger(__name__)
 
-# Probe timeout per individual request (seconds)
-_PROBE_TIMEOUT = 10
+# SSRFmap modules to run — covers cloud metadata across major providers
+_MODULES = "aws,gce,azure,digitalocean,alibaba"
 
-# Default parameter names to try when no specific parameter is provided
+# Default SSRF-prone parameter names to probe when none is specified
 _SSRF_PARAM_NAMES = ["url", "uri", "link", "redirect", "next", "callback", "src", "host"]
 
-# Strings present in cloud metadata responses — confirms reflected SSRF
-_METADATA_INDICATORS = re.compile(
-    r"ami-id|instance-id|iam/security-credentials|computeMetadata|"
-    r"latest/meta-data|placement/region|access.?key|security-credentials",
-    re.IGNORECASE,
-)
+# Parses SSRFmap's "[!]" finding lines
+_FINDING_RE = re.compile(r"\[!\]\s*(.+)", re.IGNORECASE)
 
-# Error-text patterns that indicate the server tried to fetch the injected URL
-_INTERNAL_INDICATORS = re.compile(
-    r"connection refused|refused to connect|ECONNREFUSED|"
-    r"127\.0\.0\.1|localhost|failed to connect|cannot connect|"
-    r"network error|SSRF|invalid URL scheme",
-    re.IGNORECASE,
-)
-
-_DEFAULT_PAYLOADS = [
-    "http://169.254.169.254/latest/meta-data/",
-    "http://169.254.169.254/",
-    "http://metadata.google.internal/computeMetadata/v1/",
-    "http://100.100.100.200/latest/meta-data/",
-    "http://127.0.0.1/",
-    "http://0.0.0.0/",
-    "http://localhost/",
-    "http://10.0.0.1/",
-    "http://192.168.0.1/",
-]
+# Severity heuristic based on which module triggered
+_MODULE_SEVERITY = {
+    "aws":          "critical",
+    "gce":          "critical",
+    "azure":        "critical",
+    "digitalocean": "critical",
+    "alibaba":      "critical",
+    "readfiles":    "high",
+    "portscan":     "high",
+}
 
 
 async def ssrf_tester(
     ctx: Context,  # type: ignore[type-arg]
     target: str,
-    payloads: list[str] | None = None,
+    payloads: list[str] | None = None,  # accepted for API compatibility, SSRFmap uses its own
     parameter: str = "",
-    timeout: int = 30,
+    timeout: int = 120,
 ) -> dict:  # type: ignore[type-arg]
-    """Test a URL for Server-Side Request Forgery (SSRF) vulnerabilities.
+    """Test a URL for Server-Side Request Forgery (SSRF) vulnerabilities using SSRFmap.
 
-    Injects SSRF payloads (cloud metadata URLs, internal IP addresses) into
-    query parameters and checks the server response for evidence of a
-    server-side fetch. Detects two classes of SSRF:
-
-    - Reflected SSRF: response body contains content from the injected URL
-      (e.g. AWS metadata strings such as 'ami-id' or 'instance-id').
-    - Error-based SSRF: server error message reveals an attempted internal
-      fetch (e.g. 'Connection refused to 127.0.0.1').
-    - Blind/timeout SSRF: request to an internal IP hangs — the server is
-      likely attempting the fetch but getting no response.
+    SSRFmap (https://github.com/swisskyrepo/SSRFmap) by swisskyrepo probes
+    URL parameters with cloud metadata payloads (AWS, GCP, Azure, DigitalOcean,
+    Alibaba) and detects both reflected and error-based SSRF.
 
     Args:
         target: Target URL to test (with or without existing query parameters).
-        payloads: List of URLs to inject. Defaults to cloud metadata endpoints
-                  and common internal addresses.
+        payloads: Ignored — SSRFmap uses its own built-in payload modules.
+                  Accepted for API compatibility with the SSRFAgent caller.
         parameter: Specific query parameter to inject into. If empty, tries
                    common SSRF-prone names (url, uri, link, redirect, next,
                    callback, src, host) or any existing query parameters.
-        timeout: Total scan timeout in seconds. Each individual probe uses a
-                 per-request timeout of 10 s; the overall scan stops when
-                 'timeout' seconds have elapsed.
+        timeout: Scan timeout in seconds per parameter probe. Default: 120.
 
     Returns:
         SSRF scan results with a findings list. Each finding includes the
-        injected payload, matched URL, evidence excerpt, and a curl command
-        to reproduce the finding.
+        matched URL, severity, description, and a curl command to reproduce.
 
     Note:
-        - Pure Python / httpx — no subprocess, no external binary required.
-        - Blind OOB SSRF (DNS callback) is not detected without an external
-          callback server.
+        - Requires SSRFmap installed at cfg.tools.paths.ssrfmap
+          (default: /opt/SSRFmap/ssrfmap.py).
+        - If SSRFmap is not installed, returns an error result.
         - Target must be in tengu.toml [targets].allowed_hosts.
     """
+    cfg = get_config()
     audit = get_audit_logger()
     params: dict[str, object] = {
-        "target": target,
+        "target":    target,
         "parameter": parameter,
-        "timeout": timeout,
+        "timeout":   timeout,
     }
 
     target = sanitize_url(target)
@@ -108,9 +93,14 @@ async def ssrf_tester(
         await audit.log_target_blocked("ssrf_tester", target, str(exc))
         raise
 
-    effective_payloads = payloads if payloads else _DEFAULT_PAYLOADS
+    ssrfmap_path = cfg.tools.paths.ssrfmap or "/opt/SSRFmap/ssrfmap.py"
+    if not os.path.isfile(ssrfmap_path):
+        msg = f"SSRFmap not found at {ssrfmap_path} — rebuild the Tengu Docker image"
+        logger.warning("ssrf_tester: SSRFmap missing", path=ssrfmap_path)
+        await audit.log_tool_call("ssrf_tester", target, params, result="failed", error=msg)
+        return {"tool": "ssrf_tester", "target": target, "error": msg, "findings": []}
 
-    # Determine which query parameters to probe
+    # Determine which parameters to probe
     parsed = urlparse(target)
     existing_params = list(parse_qs(parsed.query, keep_blank_values=True).keys())
     if parameter:
@@ -120,144 +110,50 @@ async def ssrf_tester(
     else:
         params_to_probe = _SSRF_PARAM_NAMES
 
-    total_probes = len(effective_payloads) * len(params_to_probe)
-    await ctx.report_progress(0, total_probes, f"Starting SSRF test on {target}...")
+    await ctx.report_progress(0, len(params_to_probe), f"Starting SSRFmap on {target}...")
     await audit.log_tool_call("ssrf_tester", target, params, result="started")
 
     findings: list[dict[str, object]] = []
-    finding_keys: set[str] = set()
-    probe_keys: set[str] = set()
-    probe_count = 0
+    seen_keys: set[str] = set()
     scan_start = time.monotonic()
 
-    try:
-        from tengu.stealth import get_stealth_layer
+    for i, param_name in enumerate(params_to_probe):
+        if time.monotonic() - scan_start > timeout * len(params_to_probe):
+            break
 
-        stealth = get_stealth_layer()
+        req_file = _build_request_file(target, param_name)
+        try:
+            args = [
+                "python3",
+                ssrfmap_path,
+                "-r", req_file,
+                "-p", param_name,
+                "-m", _MODULES,
+            ]
 
-        async with stealth.create_http_client(
-            follow_redirects=True,
-            timeout=_PROBE_TIMEOUT,
-            verify=False,
-        ) as client:
-            for payload in effective_payloads:
-                if time.monotonic() - scan_start > timeout:
-                    logger.info("ssrf_tester scan timeout reached", target=target)
-                    break
+            logger.info("ssrf_tester: running SSRFmap", target=target, param=param_name)
+            t0 = time.monotonic()
+            stdout, stderr, _ = await run_command(args, timeout=timeout)
+            elapsed = time.monotonic() - t0
+            logger.info(
+                "ssrf_tester: SSRFmap finished",
+                param=param_name,
+                elapsed=round(elapsed, 1),
+            )
 
-                for param_name in params_to_probe:
-                    probe_key = f"{param_name}|{payload}"
-                    if probe_key in probe_keys:
-                        continue
-                    probe_keys.add(probe_key)
+            _parse_ssrfmap_output(stdout, target, param_name, findings, seen_keys)
 
-                    injected_url = _inject_param(target, param_name, payload)
-                    curl_cmd = f"curl -sk '{injected_url}'"
+        except Exception as exc:
+            logger.warning("ssrf_tester: SSRFmap error", param=param_name, error=str(exc))
+        finally:
+            _cleanup(req_file)
 
-                    logger.debug(
-                        "ssrf probe",
-                        url=injected_url,
-                        param=param_name,
-                        payload=payload,
-                    )
-
-                    t0 = time.monotonic()
-                    try:
-                        response = await client.get(injected_url)
-                        elapsed = time.monotonic() - t0
-                        body = response.text[:4000]
-                    except httpx.TimeoutException:
-                        elapsed = time.monotonic() - t0
-                        # Timeout probing an internal/loopback IP is a blind SSRF indicator
-                        if _is_internal_payload(payload) and elapsed >= _PROBE_TIMEOUT - 1:
-                            _maybe_add_finding(
-                                findings,
-                                finding_keys,
-                                title="Potential Blind SSRF (Connection Timeout)",
-                                severity="medium",
-                                matched_url=injected_url,
-                                description=(
-                                    f"The request to {injected_url} timed out after "
-                                    f"{elapsed:.1f}s. This may indicate the server attempted "
-                                    f"to connect to {payload} and hung — a blind SSRF indicator."
-                                ),
-                                payload=payload,
-                                curl_cmd=curl_cmd,
-                                evidence=f"Request timed out after {elapsed:.1f}s",
-                                param_name=param_name,
-                                blind=True,
-                            )
-                        probe_count += 1
-                        continue
-                    except httpx.RequestError as exc:
-                        logger.debug("ssrf probe request error", error=str(exc), url=injected_url)
-                        probe_count += 1
-                        continue
-
-                    probe_count += 1
-
-                    # Reflected SSRF: cloud metadata content in response
-                    if _METADATA_INDICATORS.search(body):
-                        evidence = _extract_evidence(body, _METADATA_INDICATORS)
-                        _maybe_add_finding(
-                            findings,
-                            finding_keys,
-                            title="SSRF — Cloud Metadata Exposure",
-                            severity="critical",
-                            matched_url=injected_url,
-                            description=(
-                                f"Server returned cloud metadata content via parameter "
-                                f"'{param_name}' when injected with {payload}. "
-                                f"The server fetched the metadata endpoint and reflected "
-                                f"its contents in the response."
-                            ),
-                            payload=payload,
-                            curl_cmd=curl_cmd,
-                            evidence=evidence,
-                            param_name=param_name,
-                            blind=False,
-                        )
-
-                    # Error-based SSRF: server error reveals internal fetch attempt
-                    elif _INTERNAL_INDICATORS.search(body) and _is_internal_payload(payload):
-                        evidence = _extract_evidence(body, _INTERNAL_INDICATORS)
-                        _maybe_add_finding(
-                            findings,
-                            finding_keys,
-                            title="SSRF — Internal Network Access (Error-Based)",
-                            severity="high",
-                            matched_url=injected_url,
-                            description=(
-                                f"Server response to parameter '{param_name}' contains error "
-                                f"text indicating an attempted fetch to {payload}. "
-                                f"The application is likely making a server-side request "
-                                f"and leaking connection errors."
-                            ),
-                            payload=payload,
-                            curl_cmd=curl_cmd,
-                            evidence=evidence,
-                            param_name=param_name,
-                            blind=False,
-                        )
-
-                    await ctx.report_progress(
-                        probe_count, total_probes, f"Tested {probe_count}/{total_probes} probe(s)"
-                    )
-
-    except Exception as exc:
-        logger.error("ssrf_tester unexpected error", error=str(exc), target=target)
-        await audit.log_tool_call(
-            "ssrf_tester", target, params, result="failed", error=str(exc)
-        )
-        return {
-            "tool":     "ssrf_tester",
-            "target":   target,
-            "error":    str(exc),
-            "findings": [],
-        }
+        await ctx.report_progress(i + 1, len(params_to_probe), f"Probed parameter '{param_name}'")
 
     duration = time.monotonic() - scan_start
-    await ctx.report_progress(probe_count, probe_count, "SSRF test complete")
+    await ctx.report_progress(
+        len(params_to_probe), len(params_to_probe), "SSRF scan complete"
+    )
     await audit.log_tool_call(
         "ssrf_tester", target, params, result="completed", duration_seconds=duration
     )
@@ -265,7 +161,6 @@ async def ssrf_tester(
     logger.info(
         "ssrf_tester complete",
         target=target,
-        probes=probe_count,
         findings=len(findings),
         duration=round(duration, 2),
     )
@@ -274,7 +169,6 @@ async def ssrf_tester(
         "tool":             "ssrf_tester",
         "target":           target,
         "duration_seconds": round(duration, 2),
-        "probes_sent":      probe_count,
         "findings_count":   len(findings),
         "findings":         findings,
     }
@@ -284,65 +178,100 @@ async def ssrf_tester(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _inject_param(url: str, param_name: str, value: str) -> str:
-    """Return url with param_name set to value in the query string."""
-    parsed = urlparse(url)
+def _build_request_file(target: str, param_name: str) -> str:
+    """Write a Burp-style HTTP request file for SSRFmap and return its path."""
+    parsed = urlparse(target)
+    host = parsed.hostname or target
+
+    # Ensure the parameter exists in the query string with a placeholder value
     qs = parse_qs(parsed.query, keep_blank_values=True)
-    qs[param_name] = [value]
+    qs[param_name] = ["http://placeholder.ssrf/"]
     new_query = urlencode({k: v[0] for k, v in qs.items()})
-    return urlunparse(parsed._replace(query=new_query))
+    path_with_qs = (parsed.path or "/") + ("?" + new_query if new_query else "")
+
+    request_lines = [
+        f"GET {path_with_qs} HTTP/1.1",
+        f"Host: {host}",
+        "User-Agent: Mozilla/5.0 (compatible; SSRFmap)",
+        "Accept: */*",
+        "Connection: close",
+        "",
+        "",
+    ]
+
+    fd, path = tempfile.mkstemp(suffix=".txt", prefix="ssrfmap_")
+    with os.fdopen(fd, "w") as f:
+        f.write("\r\n".join(request_lines))
+    return path
 
 
-def _is_internal_payload(payload: str) -> bool:
-    """Return True if the payload targets a private or loopback address."""
-    return bool(re.search(
-        r"169\.254\.|127\.\d+\.\d+\.|0\.0\.0\.0|localhost|\[::1\]|"
-        r"10\.\d+\.\d+\.|192\.168\.\d+\.|172\.(1[6-9]|2\d|3[01])\.",
-        payload,
-    ))
-
-
-def _extract_evidence(body: str, pattern: re.Pattern) -> str:  # type: ignore[type-arg]
-    """Return up to 5 matching lines from body as an evidence excerpt."""
-    lines = [line.strip() for line in body.splitlines() if pattern.search(line)]
-    return "\n".join(lines[:5]) or body[:200]
-
-
-def _maybe_add_finding(
-    findings: list[dict[str, object]],
-    finding_keys: set[str],
-    *,
-    title: str,
-    severity: str,
-    matched_url: str,
-    description: str,
-    payload: str,
-    curl_cmd: str,
-    evidence: str,
+def _parse_ssrfmap_output(
+    output: str,
+    target: str,
     param_name: str,
-    blind: bool,
+    findings: list[dict[str, object]],
+    seen_keys: set[str],
 ) -> None:
-    """Append finding if not already recorded (dedup by title + param + payload)."""
-    key = f"{title}|{param_name}|{payload}"
-    if key in finding_keys:
-        return
-    finding_keys.add(key)
-    findings.append({
-        "title":       title,
-        "severity":    severity,
-        "matched_url": matched_url,
-        "description": description,
-        "payload":     payload,
-        "curl_command": curl_cmd,
-        "evidence":    evidence,
-        "parameter":   param_name,
-        "blind":       blind,
-    })
-    logger.info(
-        "ssrf finding",
-        title=title,
-        severity=severity,
-        url=matched_url,
-        param=param_name,
-        blind=blind,
-    )
+    """Extract SSRF findings from SSRFmap's stdout."""
+    current_module = "unknown"
+
+    for line in output.splitlines():
+        # Track which module is currently running
+        module_match = re.search(r"Running module[:\s]+(\w+)", line, re.IGNORECASE)
+        if module_match:
+            current_module = module_match.group(1).lower()
+            continue
+
+        finding_match = _FINDING_RE.search(line)
+        if not finding_match:
+            continue
+
+        detail = finding_match.group(1).strip()
+        severity = _MODULE_SEVERITY.get(current_module, "high")
+
+        # Extract payload URL from the finding line if present
+        url_match = re.search(r"https?://\S+", detail)
+        payload = url_match.group(0) if url_match else detail
+
+        dedup_key = f"{current_module}|{param_name}|{payload}"
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+
+        title = f"SSRF — {current_module.upper()} Metadata Exposure"
+        description = (
+            f"SSRFmap detected SSRF via the '{param_name}' parameter on {target}. "
+            f"Module '{current_module}' confirmed the server fetched {payload}."
+        )
+        curl_cmd = (
+            f"curl -sk '{target}' --get --data-urlencode '{param_name}={payload}'"
+        )
+
+        findings.append({
+            "title":       title,
+            "severity":    severity,
+            "matched_url": target,
+            "description": description,
+            "payload":     payload,
+            "curl_command": curl_cmd,
+            "evidence":    detail,
+            "parameter":   param_name,
+            "blind":       False,
+        })
+
+        logger.info(
+            "ssrf finding",
+            title=title,
+            severity=severity,
+            target=target,
+            param=param_name,
+            module=current_module,
+        )
+
+
+def _cleanup(path: str) -> None:
+    """Remove a temp file, ignoring errors."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass

@@ -58,6 +58,7 @@ class ToolPathsConfig(BaseModel):
     subfinder: str = ""
     sqlmap: str = ""
     dalfox: str = ""
+    ssrfmap: str = "/opt/SSRFmap/ssrfmap.py"
     hydra: str = ""
     john: str = ""
     hashcat: str = ""
