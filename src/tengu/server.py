@@ -164,6 +164,7 @@ from tengu.tools.web.gobuster import gobuster_scan
 from tengu.tools.web.headers import analyze_headers
 from tengu.tools.web.nikto import nikto_scan
 from tengu.tools.web.nuclei import nuclei_scan
+from tengu.tools.web.ssrf import ssrf_tester
 from tengu.tools.web.ssl_tls import ssl_tls_check
 from tengu.tools.web.testssl import testssl_check
 from tengu.tools.web.wafw00f import wafw00f_scan
@@ -253,6 +254,7 @@ mcp.tool()(ffuf_fuzz)
 mcp.tool()(analyze_headers)
 mcp.tool()(test_cors)
 mcp.tool()(ssl_tls_check)
+mcp.tool()(ssrf_tester)
 
 # Web scanning tools (v0.2)
 mcp.tool()(gobuster_scan)
