@@ -97,7 +97,7 @@ RUN if [ "$TENGU_TIER" = "core" ]; then \
 # ── Core tier: v0.3 tools (best-effort) ─────────────────────────────────────
 RUN if [ "$TENGU_TIER" = "core" ]; then \
         apt-get update; \
-        for pkg in wafw00f feroxbuster snmp python3-dnstwist; do \
+        for pkg in wafw00f feroxbuster snmp python3-dnstwist commix; do \
             apt-get install -y --no-install-recommends "$pkg" \
                 || echo "WARNING: $pkg not available in apt, skipping"; \
         done; \
