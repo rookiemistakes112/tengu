@@ -13,7 +13,7 @@ audit_log_path = "./logs/tengu-audit.log"
 #   "10.0.0.1"           → exact IP match
 #
 # Tip: For bug bounty, use "*.target.com" to allow all discovered subdomains.
-allowed_hosts = ["juice-shop", "juice-shop.local", "dvwa", "172.20.0.0/16", "localhost", "127.0.0.1", "localhost:3000"]
+allowed_hosts = ["juice-shop", "juice-shop.local", "dvwa", "172.20.0.0/16", "172.17.0.0/16", "localhost", "127.0.0.1", "localhost:3000", "dvwa.com", "ginandjuice.shop", "http"]
 
 # Always blocked, even if listed in allowed_hosts
 blocked_hosts = []
