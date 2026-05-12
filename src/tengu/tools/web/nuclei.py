@@ -29,6 +29,7 @@ async def nuclei_scan(
     tags: list[str] | None = None,
     exclude_tags: list[str] | None = None,
     rate_limit: int = 150,
+    cookie: str = "",
     timeout: int | None = None,
 ) -> dict:
     """Scan a target for vulnerabilities using Nuclei template engine.
@@ -46,6 +47,7 @@ async def nuclei_scan(
         tags: Filter templates by tags (e.g. ["sqli", "xss", "oast"]).
         exclude_tags: Tags to exclude (e.g. ["dos", "fuzz"]).
         rate_limit: Maximum requests per second. Default: 150.
+        cookie: Session cookie for authenticated scanning (e.g. "PHPSESSID=abc123").
         timeout: Override scan timeout in seconds.
 
     Returns:
@@ -58,6 +60,7 @@ async def nuclei_scan(
         "templates": templates,
         "severity": severity,
         "tags": tags,
+        "cookie": cookie,
     }
 
     target = sanitize_url(target)
@@ -101,6 +104,10 @@ async def nuclei_scan(
         safe_exclude = [t for t in exclude_tags if re.match(r"^[a-zA-Z0-9_\-]+$", t)]
         if safe_exclude:
             args.extend(["-etags", ",".join(safe_exclude)])
+
+    if cookie:
+        sanitized_cookie = cookie.replace("\r", "").replace("\n", "").replace("\x00", "")
+        args.extend(["-H", f"Cookie: {sanitized_cookie}"])
 
     # Stealth: inject -proxy flag if proxy is active
     from tengu.stealth import get_stealth_layer
