@@ -38,6 +38,7 @@ async def sqlmap_scan(
     suffix: str = "",
     tamper: str = "",
     batch: bool = True,
+    forms: bool = False,
     dump: bool = False,
     enum_tables: bool = False,
     enum_users: bool = False,
@@ -80,6 +81,9 @@ async def sqlmap_scan(
         tamper: Tamper script name(s) to bypass WAF/filters
                 (e.g. "space2comment", "between,randomcase").
         batch: Run in non-interactive batch mode (recommended: True).
+        forms: Crawl the target URL for HTML forms and test each one automatically.
+               Use when no pre-known parameterised URLs are available (e.g. authenticated
+               app where recon found 0 URLs). Equivalent to sqlmap --forms.
         dump: Dump contents of affected database tables (requires confirmed injection).
         enum_tables: Enumerate database tables (--tables flag).
         enum_users: Enumerate database users (--users flag).
@@ -148,6 +152,9 @@ async def sqlmap_scan(
 
     if batch:
         args.append("--batch")
+
+    if forms:
+        args.append("--forms")
 
     if data:
         # Sanitize POST data — remove any shell metacharacters
