@@ -29,6 +29,7 @@ async def commix_scan(
     method: str = "GET",
     data: str = "",
     level: int = 1,
+    forms: bool = False,
     timeout: int | None = None,
 ) -> dict:
     """Test a URL for OS command injection vulnerabilities using Commix.
@@ -45,6 +46,7 @@ async def commix_scan(
         method: HTTP method: GET or POST.
         data: POST data string (e.g. "param=value").
         level: Detection level (1-3). Default: 1.
+        forms: Auto-discover and test HTML forms on the target page.
         timeout: Override scan timeout in seconds.
 
     Returns:
@@ -56,7 +58,7 @@ async def commix_scan(
     """
     cfg = get_config()
     audit = get_audit_logger()
-    params: dict[str, object] = {"url": url, "method": method, "level": level}
+    params: dict[str, object] = {"url": url, "method": method, "level": level, "forms": forms}
 
     url = sanitize_url(url)
     method = method.upper()
@@ -75,14 +77,20 @@ async def commix_scan(
     tool_path = resolve_tool_path("commix")
     effective_timeout = timeout or cfg.tools.defaults.scan_timeout
 
-    args = [tool_path, "-u", url, "--batch", "--output-dir=/tmp/commix_tengu"]
+    safe_data = ""
+    if data:
+        safe_data = re.sub(r"[;&|`$<>()\{\}]", "", data)
+
+    # commix v4.1 ignores -u and reads targets from stdin.
+    # Pass the URL via stdin_data; omit -u entirely.
+    args = [tool_path, "--batch", "--output-dir=/tmp/commix_tengu"]
+    stdin_payload = (url + "\n").encode()
 
     if level > 1:
         args.extend([f"--level={level}"])
 
-    safe_data = ""
-    if data:
-        safe_data = re.sub(r"[;&|`$<>()\{\}]", "", data)
+    if forms:
+        args.append("--crawl=2")
 
     if method == "POST" and safe_data:
         args.extend(["--data", safe_data])
@@ -103,7 +111,9 @@ async def commix_scan(
         await audit.log_tool_call("commix", url, params, result="started")
 
         try:
-            stdout, stderr, returncode = await run_command(args, timeout=effective_timeout)
+            stdout, stderr, returncode = await run_command(
+                args, timeout=effective_timeout, stdin_data=stdin_payload
+            )
         except Exception as exc:
             await audit.log_tool_call("commix", url, params, result="failed", error=str(exc))
             raise
@@ -135,15 +145,16 @@ def _parse_commix_output(output: str) -> dict:
     vulnerable = False
 
     for line in output.splitlines():
-        is_positive = "[+]" in line
-        is_negative = "[-]" in line
         line_lower = line.lower()
-        has_vuln_keyword = "vulnerable" in line_lower or "injectable" in line_lower
-        has_injection_keyword = "injection" in line_lower and not is_negative
-
-        if is_positive or has_vuln_keyword or has_injection_keyword:
+        # Only confirmed findings count — commix startup banner contains "injection"
+        # as normal text, so matching that word alone causes universal false positives.
+        is_confirmed = (
+            ("[+]" in line and "injectable" in line_lower)
+            or ("[+]" in line and "vulnerable" in line_lower)
+            or ("parameter" in line_lower and "injectable" in line_lower)
+        )
+        if is_confirmed:
             evidence.append(line.strip())
-            if is_positive or has_vuln_keyword or has_injection_keyword:
-                vulnerable = True
+            vulnerable = True
 
     return {"vulnerable": vulnerable, "evidence": evidence[:20]}

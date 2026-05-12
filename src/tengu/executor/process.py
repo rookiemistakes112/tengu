@@ -24,6 +24,7 @@ async def run_command(
     timeout: int = 600,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
+    stdin_data: bytes | None = None,
 ) -> tuple[str, str, int]:
     """Run an external command and return (stdout, stderr, returncode).
 
@@ -33,6 +34,10 @@ async def run_command(
         timeout: Maximum execution time in seconds.
         env: Optional environment variables (merged with current env).
         cwd: Working directory for the process.
+        stdin_data: Optional bytes to write to the process stdin. If None,
+                    stdin is inherited from the parent (usually /dev/null in
+                    server contexts). Use this for tools like commix v4.1
+                    that read targets from stdin.
 
     Returns:
         Tuple of (stdout, stderr, returncode).
@@ -58,18 +63,21 @@ async def run_command(
 
     start = time.monotonic()
 
+    stdin_mode = asyncio.subprocess.PIPE if stdin_data is not None else None
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *safe_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=stdin_mode,
             env=env,
             cwd=cwd,
         )
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(),
+                proc.communicate(input=stdin_data),
                 timeout=timeout,
             )
         except TimeoutError as exc:
