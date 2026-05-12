@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import urlparse
 
 import structlog
 from fastmcp import Context
@@ -16,6 +17,20 @@ from tengu.security.rate_limiter import rate_limited
 from tengu.security.sanitizer import sanitize_target
 
 logger = structlog.get_logger(__name__)
+
+
+def _extract_domain(target: str) -> str:
+    """Extract bare hostname from a URL for waybackurls.
+
+    waybackurls queries archive.org by domain only — passing a full URL
+    with protocol or port causes it to return nothing.
+
+    e.g. "http://juice-shop:3000" → "juice-shop"
+         "https://example.com/path" → "example.com"
+    """
+    parsed = urlparse(target)
+    # urlparse gives us the hostname without port
+    return parsed.hostname or target
 
 
 def _parse_waybackurls_output(output: str) -> list[str]:
@@ -65,10 +80,12 @@ async def waybackurls_fetch(
     tool_path = resolve_tool_path("waybackurls")
     effective_timeout = timeout or cfg.tools.defaults.scan_timeout
 
-    # waybackurls reads the domain from stdin: echo domain | waybackurls
-    # We pass it as a positional argument instead using the -no-subs flag
-    # to scope results to the exact domain only (no subdomains).
-    args = [tool_path, "-no-subs", target]
+    # waybackurls queries archive.org by domain only — strip protocol and port.
+    # e.g. "http://juice-shop:3000" → "juice-shop"
+    domain = _extract_domain(target)
+
+    # -no-subs scopes results to the exact domain (no subdomains).
+    args = [tool_path, "-no-subs", domain]
 
     await ctx.report_progress(0, 100, f"Fetching Wayback Machine URLs for {target}...")
 
