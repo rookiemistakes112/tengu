@@ -17,9 +17,10 @@ from tengu.exceptions import InvalidInputError
 # Defense-in-depth: since we never use shell=True, but we still validate explicitly.
 _SHELL_METACHARACTERS = re.compile(r"[;&|`$<>()\{\}\[\]!\\\'\"\r\n]")
 
-# URL-safe variant: & is a valid query-parameter separator in URLs (RFC 3986)
-# and is harmless when passed as a subprocess arg (no shell=True ever used).
-_URL_SHELL_METACHARACTERS = re.compile(r"[;|`$<>()\{\}\[\]!\\\'\"\r\n]")
+# URL-safe variant: & and ; are valid URL characters (RFC 3986) and harmless
+# when passed as subprocess args (no shell=True ever used).
+# ; appears in Java session URLs: /action;jsessionid=ABC123
+_URL_SHELL_METACHARACTERS = re.compile(r"[|`$<>()\{\}\[\]!\\\'\"\r\n]")
 
 # Valid hostname pattern (RFC 1123)
 _HOSTNAME_PATTERN = re.compile(
