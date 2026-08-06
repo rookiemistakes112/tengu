@@ -159,6 +159,7 @@ from tengu.tools.web.cors import test_cors
 
 # New tools v0.3 — Web
 from tengu.tools.web.feroxbuster import feroxbuster_scan
+from tengu.tools.web.fetch_url import fetch_url
 from tengu.tools.web.ffuf import ffuf_fuzz
 from tengu.tools.web.gobuster import gobuster_scan
 from tengu.tools.web.headers import analyze_headers
@@ -255,6 +256,7 @@ mcp.tool()(analyze_headers)
 mcp.tool()(test_cors)
 mcp.tool()(ssl_tls_check)
 mcp.tool()(ssrf_tester)
+mcp.tool()(fetch_url)
 
 # Web scanning tools (v0.2)
 mcp.tool()(gobuster_scan)
