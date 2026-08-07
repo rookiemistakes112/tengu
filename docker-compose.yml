@@ -13,8 +13,11 @@ services:
     cap_add:
       - NET_RAW    # required for nmap SYN scan and masscan raw sockets
       - NET_ADMIN  # required for masscan
-    security_opt:
-      - no-new-privileges
+    # NOTE: no-new-privileges intentionally omitted — combined with cap_add it
+    # triggers a runc bug where the container's init process fails to exec
+    # anything at all ("exec ...: operation not permitted"), confirmed via
+    # `docker run --cap-add=NET_ADMIN --cap-add=NET_RAW --security-opt
+    # no-new-privileges alpine echo hi` failing the same way on this host.
     volumes:
       - tengu-output:/app/output
       - tengu-logs:/app/logs
@@ -113,7 +116,7 @@ services:
     depends_on:
       tengu:
         condition: service_healthy
-    entrypoint: ["/entrypoint-agent.sh"]
+    entrypoint: ["/bin/bash", "/entrypoint-agent.sh"]
     volumes:
       - tengu-output:/app/output
       - tengu-logs:/app/logs
@@ -136,8 +139,7 @@ services:
     cap_add:
       - NET_RAW
       - NET_ADMIN
-    security_opt:
-      - no-new-privileges
+    # NOTE: no-new-privileges intentionally omitted — see tengu service above.
     stdin_open: true    # Required for human-in-the-loop approval prompts
     tty: true           # Required for human-in-the-loop approval prompts
     networks:

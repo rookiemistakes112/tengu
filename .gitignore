@@ -74,6 +74,9 @@ Thumbs.db
 /tmp/tengu_*
 tengu.toml.local
 
+# Local machine-specific compose overrides (not for the shared repo)
+docker-compose.local.yml
+
 # Node (MCP Inspector)
 node_modules/
 
