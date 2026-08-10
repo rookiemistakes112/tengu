@@ -39,11 +39,25 @@ class ToolExecutionError(TenguError):
 
 
 class ScanTimeoutError(TenguError):
-    """Scan exceeded the configured timeout."""
+    """Scan exceeded the configured timeout.
 
-    def __init__(self, tool: str, timeout: int) -> None:
+    Carries whatever stdout/stderr the process had already produced before
+    being killed — callers that want to salvage partial results (rather than
+    losing everything a slow-but-working scan had already found) can read
+    partial_stdout/partial_stderr instead of treating this purely as failure.
+    """
+
+    def __init__(
+        self,
+        tool: str,
+        timeout: int,
+        partial_stdout: str = "",
+        partial_stderr: str = "",
+    ) -> None:
         self.tool = tool
         self.timeout = timeout
+        self.partial_stdout = partial_stdout
+        self.partial_stderr = partial_stderr
         super().__init__(f"Scan with '{tool}' exceeded timeout of {timeout}s")
 
 

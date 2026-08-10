@@ -68,6 +68,27 @@ class TestRunCommand:
             )
 
     @pytest.mark.asyncio
+    async def test_timeout_preserves_partial_stdout(self):
+        """A slow tool (nikto, ffuf, ...) that hasn't finished within the
+        timeout has still written real output before being killed — that
+        used to be silently discarded (the drain-after-kill communicate()
+        call's return value was never captured). Verified against a real
+        subprocess, not mocked: prints, flushes, then sleeps past the
+        timeout — the pre-sleep output must survive on the exception."""
+        with pytest.raises(ScanTimeoutError) as exc_info:
+            await run_command(
+                [
+                    sys.executable, "-c",
+                    "import sys, time; "
+                    "print('partial finding before timeout'); "
+                    "sys.stdout.flush(); "
+                    "time.sleep(10)",
+                ],
+                timeout=1,
+            )
+        assert "partial finding before timeout" in exc_info.value.partial_stdout
+
+    @pytest.mark.asyncio
     async def test_multiline_output(self):
         code = "for i in range(3): print(i)"
         stdout, _, _ = await run_command([sys.executable, "-c", code])

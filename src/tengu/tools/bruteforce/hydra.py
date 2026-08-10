@@ -26,8 +26,10 @@ _SUPPORTED_SERVICES = {
     "ssh",
     "ftp",
     "http-get",
+    "http-get-form",
     "http-post-form",
     "https-get",
+    "https-get-form",
     "https-post-form",
     "smb",
     "rdp",
@@ -55,6 +57,8 @@ async def hydra_attack(
     port: int | None = None,
     threads: int = 16,
     stop_on_success: bool = True,
+    form_path: str | None = None,
+    form_params: str | None = None,
     timeout: int | None = None,
 ) -> dict:
     """Perform a credential brute force attack using Hydra.
@@ -71,6 +75,15 @@ async def hydra_attack(
         port: Override default port for the service.
         threads: Number of parallel attack threads (default: 16, max: 64).
         stop_on_success: Stop after finding the first valid credential pair.
+        form_path: Required for *-form services (http-post-form, http-get-form,
+            https-post-form, https-get-form) — the login form's URL path
+            (e.g. "/login.php").
+        form_params: Required for *-form services — Hydra's form-module
+            argument in "<post_data>:<failure_string>" syntax, with ^USER^
+            and ^PASS^ placeholders (e.g.
+            "username=^USER^&password=^PASS^:Invalid credentials"). Combined
+            with form_path into Hydra's full module argument:
+            "<form_path>:<form_params>".
         timeout: Override scan timeout in seconds.
 
     Returns:
@@ -92,6 +105,18 @@ async def hydra_attack(
         return {
             "tool": "hydra",
             "error": f"Unsupported service '{service}'. Supported: {', '.join(sorted(_SUPPORTED_SERVICES))}",
+        }
+
+    is_form_service = service.endswith("-form")
+    if is_form_service and not (form_path and form_params):
+        return {
+            "tool": "hydra",
+            "error": (
+                f"Service '{service}' requires both form_path and form_params "
+                "(Hydra's *-form modules need a module argument in "
+                "'<path>:<post_data>:<failure_string>' syntax — there is no "
+                "sensible default login path/params to fall back to)."
+            ),
         }
 
     userlist = sanitize_wordlist_path(userlist)
@@ -125,6 +150,20 @@ async def hydra_attack(
 
     if port and 1 <= port <= 65535:
         args.extend(["-s", str(port)])
+
+    if is_form_service:
+        # Hydra's *-form modules take a single extra positional argument:
+        # "<path>:<post_data_with_^USER^/^PASS^_placeholders>:<failure_string>".
+        # form_params already carries the "<post_data>:<failure_string>" half
+        # (that's the caller-facing contract) — this just prepends the path.
+        # No shell is involved (create_subprocess_exec, not shell=True) so
+        # this can't be used for shell injection, but CRLF could still
+        # corrupt Hydra's own argument parsing or spoof audit log lines.
+        safe_path = form_path.replace("\r", "").replace("\n", "").replace("\x00", "")
+        safe_params = form_params.replace("\r", "").replace("\n", "").replace("\x00", "")
+        module_arg = f"{safe_path}:{safe_params}"
+        args.append(module_arg)
+        params["form_module"] = module_arg
 
     # Output format for easier parsing
     args.extend(["-o", "/dev/stdout"])
@@ -162,13 +201,23 @@ async def hydra_attack(
 
 
 def _parse_hydra_output(output: str) -> list[dict]:
-    """Parse Hydra output for valid credentials."""
+    """Parse Hydra output for valid credentials.
+
+    Real Hydra output (verified live, v9.7) is
+    "[port][service] host: HOST   login: USER   password: PASS" — the
+    previous pattern assumed "login:" followed "[.+?]" directly with no
+    "host: HOST" in between, so it never matched a single real credential
+    line; valid_credentials_found was always 0 regardless of what Hydra
+    actually found. Matches the pattern already used (and already correct)
+    in agents/auth_failures_agent.py's own parse_hydra_output — that one
+    works because it deliberately re-parses this same raw output instead of
+    trusting this function's result.
+    """
     credentials = []
 
     for line in output.splitlines():
-        # Pattern: [service][host:port] login: USER password: PASS
         m = re.search(
-            r"\[.+?\]\s+login:\s+(\S+)\s+password:\s+(\S+)",
+            r"\[\d+\]\[\S+\]\s+host:\s+\S+\s+login:\s+(\S+)\s+password:\s+(\S+)",
             line,
             re.IGNORECASE,
         )

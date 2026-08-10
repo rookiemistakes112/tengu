@@ -118,6 +118,20 @@ class TestScanTimeoutError:
         assert "nmap" in str(err)
         assert "300" in str(err)
 
+    def test_partial_output_defaults_empty(self):
+        err = ScanTimeoutError("nmap", 300)
+        assert err.partial_stdout == ""
+        assert err.partial_stderr == ""
+
+    def test_partial_output_stored(self):
+        err = ScanTimeoutError(
+            "nikto", 400,
+            partial_stdout="+ [750500] /config/: Directory indexing found.",
+            partial_stderr="some warning",
+        )
+        assert err.partial_stdout == "+ [750500] /config/: Directory indexing found."
+        assert err.partial_stderr == "some warning"
+
 
 class TestRateLimitError:
     def test_is_tengu_error(self):

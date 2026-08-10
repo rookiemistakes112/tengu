@@ -74,24 +74,67 @@ async def run_command(
             env=env,
             cwd=cwd,
         )
-
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(input=stdin_data),
-                timeout=timeout,
-            )
-        except TimeoutError as exc:
-            proc.kill()
-            await proc.communicate()
-            raise ScanTimeoutError(executable, timeout) from exc
-
     except FileNotFoundError as exc:
         raise ToolNotFoundError(executable) from exc
 
+    if stdin_data is not None:
+        try:
+            proc.stdin.write(stdin_data)
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            proc.stdin.close()
+
+    # Drain stdout/stderr continuously into our own buffers rather than via
+    # proc.communicate(), which discards whatever it had already buffered
+    # internally when cancelled by a timeout — verified live: a slow tool's
+    # real pre-timeout output came back as 0 bytes when re-calling
+    # communicate() a second time after kill(), because the cancelled first
+    # call had already torn down the pipe transport. Reading into external
+    # lists via independent background tasks means only the *wait*, not the
+    # *read*, is subject to cancellation — already-appended chunks survive
+    # regardless of how the process ends.
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    async def _drain(stream: asyncio.StreamReader | None, sink: list[bytes]) -> None:
+        if stream is None:
+            return
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                break
+            sink.append(chunk)
+
+    stdout_task = asyncio.ensure_future(_drain(proc.stdout, stdout_chunks))
+    stderr_task = asyncio.ensure_future(_drain(proc.stderr, stderr_chunks))
+
+    timed_out = False
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+    except TimeoutError:
+        timed_out = True
+        proc.kill()
+        await proc.wait()
+
+    # The drain tasks were never cancelled — they finish on their own once
+    # the process's pipes hit EOF, which happens as soon as it exits
+    # (killed or not), so this just waits for whatever's already in flight
+    # to settle.
+    await asyncio.gather(stdout_task, stderr_task)
+
     duration = time.monotonic() - start
-    stdout = stdout_bytes.decode("utf-8", errors="replace")
-    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+    stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
     returncode = proc.returncode or 0
+
+    if timed_out:
+        log.warning(
+            "Command timed out — partial output preserved",
+            partial_stdout_len=len(stdout),
+        )
+        raise ScanTimeoutError(executable, timeout, stdout, stderr)
 
     log.debug(
         "Command completed",

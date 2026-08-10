@@ -1,5 +1,7 @@
 """FFUF directory/endpoint fuzzer tool wrapper."""
 
+import base64
+import binascii
 import json
 import re
 import time
@@ -9,6 +11,7 @@ import structlog
 from fastmcp import Context
 
 from tengu.config import get_config
+from tengu.exceptions import ScanTimeoutError
 from tengu.executor.process import run_command
 from tengu.executor.registry import resolve_tool_path
 from tengu.security.allowlist import make_allowlist_from_config
@@ -137,12 +140,24 @@ async def ffuf_fuzz(
 
     await ctx.report_progress(0, 100, f"Starting FFUF fuzzing on {url}...")
 
+    timed_out = False
     async with rate_limited("ffuf"):
         start = time.monotonic()
         await audit.log_tool_call("ffuf", url, params, result="started")
 
         try:
             stdout, stderr, returncode = await run_command(args, timeout=effective_timeout)
+        except ScanTimeoutError as exc:
+            # A wordlist scan that hasn't finished has still matched real
+            # endpoints along the way (ffuf streams one JSON line per match
+            # as it goes) — salvage them instead of discarding the whole
+            # scan just because the full wordlist didn't complete in time.
+            timed_out = True
+            stdout = exc.partial_stdout
+            await audit.log_tool_call(
+                "ffuf", url, params, result="timed_out",
+                error=f"partial results salvaged, {len(stdout)} chars captured",
+            )
         except Exception as exc:
             await audit.log_tool_call("ffuf", url, params, result="failed", error=str(exc))
             raise
@@ -154,7 +169,8 @@ async def ffuf_fuzz(
     results = _parse_ffuf_output(stdout)
 
     await ctx.report_progress(100, 100, "Fuzzing complete")
-    await audit.log_tool_call("ffuf", url, params, result="completed", duration_seconds=duration)
+    if not timed_out:
+        await audit.log_tool_call("ffuf", url, params, result="completed", duration_seconds=duration)
 
     return {
         "tool": "ffuf",
@@ -162,30 +178,64 @@ async def ffuf_fuzz(
         "wordlist": effective_wordlist,
         "method": method,
         "duration_seconds": round(duration, 2),
+        "timed_out": timed_out,
         "results_count": len(results),
         "results": results,
     }
 
 
 def _parse_ffuf_output(output: str) -> list[dict]:
-    """Parse FFUF JSON output."""
+    """Parse FFUF's -json output.
+
+    -json streams one JSON object per match directly to stdout (NDJSON) —
+    it does NOT produce a single {"results": [...]} blob (that shape only
+    comes from -o file.json -of json, a different output mode this tool
+    doesn't use). Parsing the whole output as one json.loads() call throws
+    JSONDecodeError on any scan with more than one match and was silently
+    swallowed by a bare except, so every ffuf_fuzz call that found more
+    than a trivial number of results returned 0 — confirmed live: raw ffuf
+    found /config, /docs, /external, .htaccess etc. against a real target,
+    while this tool's own parser reported "no endpoints discovered" for
+    the identical scan.
+    """
     results = []
 
-    try:
-        data = json.loads(output)
-        for entry in data.get("results", []):
-            results.append(
-                {
-                    "url": entry.get("url", ""),
-                    "status": entry.get("status", 0),
-                    "length": entry.get("length", 0),
-                    "words": entry.get("words", 0),
-                    "lines": entry.get("lines", 0),
-                    "redirect_location": entry.get("redirectlocation", ""),
-                    "input": entry.get("input", {}).get("FUZZ", ""),
-                }
-            )
-    except (json.JSONDecodeError, KeyError):
-        pass
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict) or "status" not in entry:
+            continue
+
+        results.append(
+            {
+                "url": entry.get("url", ""),
+                "status": entry.get("status", 0),
+                "length": entry.get("length", 0),
+                "words": entry.get("words", 0),
+                "lines": entry.get("lines", 0),
+                "redirect_location": entry.get("redirectlocation", ""),
+                "input": _decode_fuzz_input(entry.get("input", {}).get("FUZZ", "")),
+            }
+        )
 
     return results
+
+
+def _decode_fuzz_input(raw_fuzz: str) -> str:
+    """This ffuf version (2.1.0-dev) base64-encodes the FUZZ input value in
+    -json output (verified live: "LmdpdGlnbm9yZQ==" for a wordlist entry
+    that produced /.gitignore — confirmed against the matched url in the
+    same JSON object). Returning it undecoded is technically not wrong but
+    useless to a human or another agent reading discovered_urls. Falls back
+    to the raw value if it isn't valid base64 (older/other ffuf builds)."""
+    if not raw_fuzz:
+        return raw_fuzz
+    try:
+        return base64.b64decode(raw_fuzz, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return raw_fuzz

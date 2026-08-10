@@ -7,6 +7,73 @@ Tengu uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — Timeout Resilience and Scan Accuracy Fixes
+
+### Fixed
+
+**Timeout handling discarded all partial output (`executor/process.py`)**
+- `run_command()` used a single `asyncio.wait_for(proc.communicate())` call. Cancelling that
+  call on timeout tore down the subprocess's pipe transport, so any output already produced
+  before the kill was lost — every timed-out scan returned nothing, even if the tool had
+  found real results seconds before the timeout fired. Redesigned around independent
+  background drain tasks (`_drain()`) that read `proc.stdout`/`proc.stderr` continuously and
+  are never cancelled; on timeout, only `proc.wait()` is cancelled and the process is killed,
+  then the drain tasks are awaited to completion so whatever was already written is kept.
+  `ScanTimeoutError` now carries `partial_stdout`/`partial_stderr` so callers can salvage
+  results instead of getting nothing. Verified with a new real-subprocess test
+  (`test_timeout_preserves_partial_stdout`) — the naive "call `communicate()` again after
+  `kill()`" fix was tried first and failed this same test (returned empty), which is what
+  led to the drain-task redesign.
+
+**nikto (`tools/web/nikto.py`) silently discarded 100% of its findings**
+- `-Format json -output /dev/stdout` produces no output at all on this nikto build (2.6.0) —
+  confirmed by testing 3 flag variations directly against the binary. Removed the JSON
+  output flags entirely and rewrote `_parse_nikto_output` to parse nikto's plain-text
+  output, matching only bracketed-ID finding lines (`^\+\s*\[(?P<id>[^\]]+)\]\s*(?P<rest>.*)$`)
+  instead of also capturing metadata lines as false findings.
+- Also catches `ScanTimeoutError` and salvages `exc.partial_stdout` into a
+  `{"timed_out": True, ...}` result instead of losing the scan entirely — nikto's own
+  scan time (measured live: 322–323s at a misconfig+file-retrieval tuning) regularly
+  exceeded the timeout it used to run under.
+
+**ffuf (`tools/web/ffuf.py`) silently reported 0 results on every scan**
+- `_parse_ffuf_output` parsed ffuf's `-json` output as a single JSON blob
+  (`json.loads(output)`), but ffuf actually streams NDJSON (one JSON object per line) — this
+  threw `JSONDecodeError` on any scan with more than one match, caught by a bare
+  `except: pass`, so ffuf reported "0 endpoints discovered" even when it found real results
+  (verified directly against the raw binary: `/config`, `/docs`, `/external`, `.htaccess`).
+  Rewrote to parse line-by-line. Also added `_decode_fuzz_input()` — ffuf 2.1.0-dev
+  base64-encodes the `FUZZ` input field in its NDJSON output, previously passed through
+  un-decoded. Same `ScanTimeoutError` partial-result salvage as nikto.
+
+**hydra (`tools/bruteforce/hydra.py`) — form-based login attacks were unsupported, and credential parsing never matched real output**
+- `_SUPPORTED_SERVICES` was missing `http-get-form`/`https-get-form`. Added, alongside new
+  `form_path`/`form_params` parameters — Hydra's `*-form` modules need a single positional
+  module argument in `"<path>:<post_data>:<failure_string>"` syntax that `hydra_attack` had
+  no way to supply before. Validates both are present when the service is a `-form` variant;
+  CRLF/NUL-stripped before being joined (no shell involved — `create_subprocess_exec`, not
+  `shell=True` — but stray CRLF could still corrupt Hydra's own arg parsing or spoof audit
+  log lines).
+- `_parse_hydra_output`'s regex (`r"\[.+?\]\s+login:..."`) never matched real Hydra v9.7
+  output, which has a `host: HOST` segment between the port/service brackets and `login:`
+  that the old pattern didn't account for — `valid_credentials_found` was silently always 0
+  regardless of what Hydra actually found. Fixed to match the same structure Hellfire's own
+  (already-correct) `auth_failures_agent.py` parser uses. Verified live against DVWA: a real
+  crack (`admin` / a wordlist password) now correctly reports
+  `valid_credentials_found: 1` with the credential populated, instead of 0.
+
+### Known follow-up (not fixed here)
+- Live-verifying the hydra fix above against DVWA's login form surfaced a separate,
+  pre-existing accuracy issue: Hydra reported a *wrong* password (not the real DVWA default)
+  as valid. Root cause looks like DVWA's login CSRF token requirement causing some
+  failed-login responses to not contain the configured failure string, which Hydra then
+  reads as success. This is a target/form-behavior issue, not a Tengu parsing bug — the
+  regex fix above correctly parses whatever Hydra reports — but it means `hydra_attack`
+  results against CSRF-protected forms should be treated as needing manual confirmation
+  until this is investigated further.
+
+---
+
 ## [0.4.0] — Code Quality and DX Improvements
 
 ### Added
