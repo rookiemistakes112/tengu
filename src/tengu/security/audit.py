@@ -95,7 +95,7 @@ class AuditLogger:
 
 
 _SENSITIVE_KEYS = frozenset(
-    {"password", "passwd", "secret", "token", "key", "api_key", "passlist", "credentials"}
+    {"password", "passwd", "secret", "token", "key", "api_key", "passlist", "credentials", "cookie"}
 )
 
 

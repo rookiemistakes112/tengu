@@ -92,6 +92,7 @@ services:
       tengu-net:
         aliases:
           - juice-shop
+          - juice-shop.local
 
   dvwa:
     image: vulnerables/web-dvwa:latest
@@ -102,6 +103,7 @@ services:
       tengu-net:
         aliases:
           - dvwa
+          - dvwa.local
 
   # ── Tengu Autonomous Agent (profile: agent) ──────────────────────────────────
   tengu-agent:

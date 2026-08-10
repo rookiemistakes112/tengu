@@ -64,7 +64,7 @@ def _make_whatweb_json_line(
     return json.dumps([entry])
 
 
-async def _call_whatweb(mocks, target="http://example.com", aggression=1, timeout=None):
+async def _call_whatweb(mocks, target="http://example.com", aggression=1, cookie="", timeout=None):
     from tengu.tools.osint.webtech import whatweb_scan
 
     with (
@@ -76,7 +76,7 @@ async def _call_whatweb(mocks, target="http://example.com", aggression=1, timeou
         patch(f"{TOOL_MODULE}.run_command", new=AsyncMock(return_value=mocks["run_return"])),
         patch(f"{TOOL_MODULE}.rate_limited", new=_make_rate_limited_mock()),
     ):
-        return await whatweb_scan(mocks["ctx"], target, aggression=aggression, timeout=timeout)
+        return await whatweb_scan(mocks["ctx"], target, aggression=aggression, cookie=cookie, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -173,3 +173,20 @@ class TestWhatweb:
         mocks = _make_fixtures(run_stdout=stdout)
         result = await _call_whatweb(mocks)
         assert result["http_status"] == 403
+
+    async def test_cookie_included_in_command(self):
+        mocks = _make_fixtures()
+        result = await _call_whatweb(mocks, cookie="PHPSESSID=abc123; security=low")
+        assert "--cookie=PHPSESSID=abc123; security=low" in result["command"]
+
+    async def test_no_cookie_flag_when_cookie_empty(self):
+        mocks = _make_fixtures()
+        result = await _call_whatweb(mocks)
+        assert "--cookie=" not in result["command"]
+
+    async def test_cookie_strips_crlf_and_null(self):
+        mocks = _make_fixtures()
+        result = await _call_whatweb(mocks, cookie="PHPSESSID=abc\r\n123\x00")
+        assert "--cookie=PHPSESSID=abc123" in result["command"]
+        assert "\r" not in result["command"]
+        assert "\n" not in result["command"]

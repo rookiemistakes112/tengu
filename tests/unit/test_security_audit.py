@@ -46,6 +46,11 @@ class TestRedactSensitive:
         result = _redact_sensitive(params)
         assert result["credentials"] == "[REDACTED]"
 
+    def test_cookie_redacted(self):
+        params = {"cookie": "PHPSESSID=abc123; security=low"}
+        result = _redact_sensitive(params)
+        assert result["cookie"] == "[REDACTED]"
+
     def test_case_insensitive_key_matching(self):
         params = {"PASSWORD": "secret", "Token": "tok"}
         result = _redact_sensitive(params)
@@ -80,6 +85,9 @@ class TestSensitiveKeys:
 
     def test_api_key_present(self):
         assert "api_key" in _SENSITIVE_KEYS
+
+    def test_cookie_present(self):
+        assert "cookie" in _SENSITIVE_KEYS
 
     def test_all_lowercase(self):
         for key in _SENSITIVE_KEYS:

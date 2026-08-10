@@ -23,6 +23,7 @@ async def whatweb_scan(
     ctx: Context,
     target: str,
     aggression: int = 1,
+    cookie: str = "",
     timeout: int | None = None,
 ) -> dict:
     """Detect web technologies, CMS, frameworks, and WAF using WhatWeb.
@@ -30,6 +31,7 @@ async def whatweb_scan(
     Args:
         target: Target URL to fingerprint (e.g. https://example.com).
         aggression: Aggression level 1-4 (1=passive/stealthy, 3=aggressive, 4=heavy).
+        cookie: Session cookie for authenticated fingerprinting (e.g. "PHPSESSID=abc123").
         timeout: Override default timeout in seconds.
 
     Returns:
@@ -42,7 +44,7 @@ async def whatweb_scan(
     """
     cfg = get_config()
     audit = get_audit_logger()
-    params = {"target": target, "aggression": aggression}
+    params = {"target": target, "aggression": aggression, "cookie": cookie}
 
     target = sanitize_url(target)
     aggression = max(1, min(aggression, 4))
@@ -62,8 +64,13 @@ async def whatweb_scan(
         f"--aggression={aggression}",
         "--log-json=-",
         "--no-errors",
-        target,
     ]
+
+    if cookie:
+        sanitized_cookie = cookie.replace("\r", "").replace("\n", "").replace("\x00", "")
+        args.append(f"--cookie={sanitized_cookie}")
+
+    args.append(target)
 
     await ctx.report_progress(0, 100, f"Starting WhatWeb fingerprinting on {target}...")
 
