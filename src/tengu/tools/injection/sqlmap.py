@@ -13,6 +13,7 @@ import structlog
 from fastmcp import Context
 
 from tengu.config import get_config
+from tengu.exceptions import ScanTimeoutError
 from tengu.executor.process import run_command
 from tengu.executor.registry import resolve_tool_path
 from tengu.security.allowlist import make_allowlist_from_config
@@ -238,12 +239,24 @@ async def sqlmap_scan(
 
     await ctx.report_progress(0, 100, f"Starting SQLMap test on {url}...")
 
+    timed_out = False
     async with rate_limited("sqlmap"):
         start = time.monotonic()
         await audit.log_tool_call("sqlmap", url, params, result="started")
 
         try:
             stdout, stderr, returncode = await run_command(args, timeout=effective_timeout)
+        except ScanTimeoutError as exc:
+            # A scan that hasn't finished within the timeout has still tested
+            # every parameter sqlmap got through before being killed — salvage
+            # those partial findings instead of discarding the whole scan.
+            # Same pattern as nikto.py/ffuf.py.
+            timed_out = True
+            stdout = exc.partial_stdout
+            await audit.log_tool_call(
+                "sqlmap", url, params, result="timed_out",
+                error=f"partial results salvaged, {len(stdout)} chars captured",
+            )
         except Exception as exc:
             await audit.log_tool_call("sqlmap", url, params, result="failed", error=str(exc))
             raise
@@ -255,13 +268,17 @@ async def sqlmap_scan(
     findings = _parse_sqlmap_output(stdout)
 
     await ctx.report_progress(100, 100, "SQL injection test complete")
-    await audit.log_tool_call("sqlmap", url, params, result="completed", duration_seconds=duration)
+    if not timed_out:
+        await audit.log_tool_call(
+            "sqlmap", url, params, result="completed", duration_seconds=duration
+        )
 
     result: dict[str, object] = {
         "tool": "sqlmap",
         "url": url,
         "method": method,
         "duration_seconds": round(duration, 2),
+        "timed_out": timed_out,
         "vulnerable": len(findings.get("vulnerable_params", [])) > 0,
         "vulnerable_parameters": findings.get("vulnerable_params", []),
         "dbms": findings.get("dbms"),

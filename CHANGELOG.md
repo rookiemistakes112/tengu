@@ -62,6 +62,15 @@ Tengu uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   crack (`admin` / a wordlist password) now correctly reports
   `valid_credentials_found: 1` with the credential populated, instead of 0.
 
+**sqlmap (`tools/injection/sqlmap.py`) discarded all findings on timeout**
+- `sqlmap_scan` re-raised on `ScanTimeoutError` instead of catching it, unlike
+  nikto.py/ffuf.py (fixed above in this same release) — a scan that ran out of time lost
+  every parameter sqlmap had already confirmed vulnerable. Now catches `ScanTimeoutError`
+  and salvages `exc.partial_stdout` into a `{"timed_out": True, ...}` result, same pattern
+  as nikto/ffuf. Hellfire's `injection_agent.py` runs sqlmap at `level=3, risk=2` against
+  live targets, which had already been observed exceeding Tengu's 600s default timeout on
+  a real site — see Hellfire's own CHANGELOG, 2026-08-10 entry.
+
 ### Known follow-up (not fixed here)
 - Live-verifying the hydra fix above against DVWA's login form surfaced a separate,
   pre-existing accuracy issue: Hydra reported a *wrong* password (not the real DVWA default)
@@ -71,6 +80,12 @@ Tengu uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   regex fix above correctly parses whatever Hydra reports — but it means `hydra_attack`
   results against CSRF-protected forms should be treated as needing manual confirmation
   until this is investigated further.
+- The sqlmap timeout-salvage fix above only addresses losing results on a single scan's
+  timeout. Hellfire's `injection_agent.py` still has no retry/backoff when its sqlmap loop
+  hits Tengu's per-tool rate limit (10 calls/min, `tengu.toml`) — it logs a failure and
+  immediately tries the next URL inside the same exhausted window, cascading into
+  near-total failure for the rest of a batch on sites with many real parameterised
+  endpoints. Not a Tengu-side fix; belongs in `injection_agent.py`'s `_run_sqlmap` loop.
 
 ---
 
