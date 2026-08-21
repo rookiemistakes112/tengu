@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import sys
 
 import pytest
@@ -87,6 +89,54 @@ class TestRunCommand:
                 timeout=1,
             )
         assert "partial finding before timeout" in exc_info.value.partial_stdout
+
+    @pytest.mark.asyncio
+    async def test_cancellation_kills_the_real_subprocess(self, tmp_path):
+        """Only the internal-timeout branch used to call proc.kill() -- a
+        cancellation from outside (e.g. an MCP client disconnecting
+        mid-scan, which the server-side session notices and cancels the
+        in-flight request for) left the real OS subprocess orphaned,
+        running in the background with nothing tracking or reaping it
+        for as long as the tool itself took to finish on its own.
+
+        Verified against a real subprocess, not mocked: it writes its own
+        PID to a file immediately on start, then sleeps well past this
+        test's patience. If run_command's cancellation handling works,
+        cancelling the awaiting task must kill that PID -- not just
+        abandon the Python coroutine watching it while the real process
+        keeps running unsupervised."""
+        pid_file = tmp_path / "pid.txt"
+        code = (
+            f"import os, time; "
+            f"open({str(pid_file)!r}, 'w').write(str(os.getpid())); "
+            f"time.sleep(30)"
+        )
+        task = asyncio.ensure_future(
+            run_command([sys.executable, "-c", code], timeout=60)
+        )
+
+        for _ in range(50):
+            if pid_file.exists() and pid_file.read_text():
+                break
+            await asyncio.sleep(0.1)
+        else:
+            task.cancel()
+            pytest.fail("subprocess never wrote its PID")
+
+        pid = int(pid_file.read_text())
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        for _ in range(20):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail(f"subprocess (pid {pid}) was not killed within 2s of cancellation")
 
     @pytest.mark.asyncio
     async def test_multiline_output(self):

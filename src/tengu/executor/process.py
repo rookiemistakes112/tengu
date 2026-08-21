@@ -117,6 +117,32 @@ async def run_command(
         timed_out = True
         proc.kill()
         await proc.wait()
+    except asyncio.CancelledError:
+        # The caller was cancelled -- e.g. an MCP client disconnected
+        # mid-scan (a hard Ctrl+C on the client doesn't send a proper
+        # MCP-protocol cancellation, but the server-side session still
+        # notices the connection dropped and cancels whatever request was
+        # in flight). Only the TimeoutError branch above used to kill the
+        # real subprocess; a cancellation from outside left it orphaned --
+        # still running in the background with nothing tracking or
+        # reaping it, for as long as the tool itself took to finish (or
+        # hang) on its own, wasting CPU/target load on a result nobody
+        # will ever receive. proc.kill() just sends SIGKILL (synchronous,
+        # not an await point), so it's safe here regardless of
+        # cancellation state. Deliberately not re-awaiting proc.wait() or
+        # the drain tasks below -- we're already unwinding from a
+        # cancellation and a second await here could itself be
+        # immediately re-cancelled by the same (still-active) scope;
+        # sending the kill signal is what actually matters, and asyncio's
+        # own child watcher reaps the zombie once it exits. Must re-raise
+        # -- swallowing a CancelledError breaks cancellation propagation
+        # for everything above this call (including the rate-limiter's
+        # own cleanup, which needs to see this exception to release its
+        # slot correctly).
+        proc.kill()
+        stdout_task.cancel()
+        stderr_task.cancel()
+        raise
 
     # The drain tasks were never cancelled — they finish on their own once
     # the process's pipes hit EOF, which happens as soon as it exits
