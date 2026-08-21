@@ -148,23 +148,33 @@ async def xss_scan(
 
 
 def _parse_dalfox_output(output: str) -> list[dict]:
-    """Parse Dalfox JSON output."""
+    """Parse Dalfox JSON output.
+
+    Dalfox's own "nothing found" convention is a JSON array containing one
+    empty object -- `[{}]`, not `[]` -- confirmed live against a real scan.
+    Every `.get(key, "")` on that empty dict resolves to "", so without
+    filtering, a completely clean scan still produced exactly one finding
+    with every field blank, misreporting vulnerable=true / findings_count=1
+    on every result regardless of whether dalfox actually found anything.
+    """
     findings = []
 
     try:
         data = json.loads(output)
         if isinstance(data, list):
             for item in data:
-                findings.append(
-                    {
-                        "type": item.get("type", ""),
-                        "parameter": item.get("param", ""),
-                        "payload": item.get("payload", ""),
-                        "evidence": item.get("evidence", ""),
-                        "poc": item.get("poc", ""),
-                    }
-                )
-        elif isinstance(data, dict):
+                if not isinstance(item, dict) or not item:
+                    continue
+                finding = {
+                    "type": item.get("type", ""),
+                    "parameter": item.get("param", ""),
+                    "payload": item.get("payload", ""),
+                    "evidence": item.get("evidence", ""),
+                    "poc": item.get("poc", ""),
+                }
+                if any(finding.values()):
+                    findings.append(finding)
+        elif isinstance(data, dict) and data:
             findings.append(data)
         return findings
     except (json.JSONDecodeError, TypeError):

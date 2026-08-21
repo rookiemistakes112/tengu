@@ -82,6 +82,32 @@ class TestXssScan:
         assert result["vulnerable"] is False
         assert result["findings"] == []
 
+    async def test_xss_real_no_vulnerabilities_shape(self, mock_ctx):
+        """Dalfox's actual "nothing found" output is `[{}]`, not `[]` --
+        confirmed live against a real scan. The other "no vulnerabilities"
+        tests in this class use `[]`, which dalfox never actually emits;
+        this one uses the real shape end-to-end through xss_scan()."""
+        from tengu.tools.injection.xss import xss_scan
+
+        mock_rl_ctx = _setup_rate_limited_mock()
+        mock_audit = AsyncMock()
+        mock_audit.log_tool_call = AsyncMock()
+
+        with (
+            patch("tengu.tools.injection.xss.get_config", return_value=_mock_config()),
+            patch("tengu.tools.injection.xss.get_audit_logger", return_value=mock_audit),
+            patch("tengu.tools.injection.xss.resolve_tool_path", return_value="/usr/bin/dalfox"),
+            patch("tengu.tools.injection.xss.rate_limited", return_value=mock_rl_ctx),
+            patch("tengu.tools.injection.xss.make_allowlist_from_config") as mock_allowlist,
+            patch("tengu.tools.injection.xss.run_command", AsyncMock(return_value=("[\n{}]", "", 0))),
+        ):
+            mock_allowlist.return_value.check.return_value = None
+            result = await xss_scan(mock_ctx, "https://secure.example.com/page")
+
+        assert result["vulnerable"] is False
+        assert result["findings"] == []
+        assert result["findings_count"] == 0
+
     async def test_xss_vulnerability_found(self, mock_ctx):
         """Output with XSS finding — vulnerability in result."""
         from tengu.tools.injection.xss import xss_scan
@@ -363,3 +389,28 @@ class TestParseDalfoxOutput:
 
     def test_empty_json_list_returns_empty(self):
         assert _parse_dalfox_output("[]") == []
+
+    def test_dalfox_real_no_vulnerabilities_shape_returns_empty(self):
+        """Dalfox's actual "nothing found" output -- confirmed live against
+        a real scan -- is `[{}]` (an array with one empty object), not the
+        `[]` every other test in this class assumes. Without filtering,
+        that empty dict's fields all default to "" via .get(key, ""),
+        producing a fully-blank "finding" and misreporting
+        vulnerable=true on every clean scan."""
+        assert _parse_dalfox_output("[{}]") == []
+
+    def test_dalfox_real_shape_with_whitespace_still_empty(self):
+        """Matches dalfox's exact real formatting (newline between the
+        array bracket and the object), not just a minified variant."""
+        assert _parse_dalfox_output("[\n{}]") == []
+
+    def test_empty_dict_among_real_findings_is_dropped(self):
+        """A mix of dalfox's empty "nothing here" placeholder and a real
+        finding in the same array -- only the real one should survive."""
+        data = [{}, _make_dalfox_finding()]
+        result = _parse_dalfox_output(json.dumps(data))
+        assert len(result) == 1
+        assert result[0]["type"] == "Reflected"
+
+    def test_bare_empty_dict_json_returns_empty(self):
+        assert _parse_dalfox_output("{}") == []
