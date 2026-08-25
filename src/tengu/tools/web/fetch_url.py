@@ -32,6 +32,7 @@ async def fetch_url(
     url: str,
     method: str = "GET",
     headers: dict[str, str] | None = None,
+    body: str | None = None,
     timeout_seconds: int = 15,
     follow_redirects: bool = True,
 ) -> dict:
@@ -46,6 +47,11 @@ async def fetch_url(
         method: HTTP method — GET, POST, HEAD, etc.
         headers: Additional request headers (e.g. {"Cookie": "PHPSESSID=..."}
                  for authenticated requests, {"Accept": "application/json"}).
+        body: Raw request body, sent as-is (e.g. a pre-encoded
+              "username=admin&password=admin123" form body, or a JSON
+              string) — the caller is responsible for setting a matching
+              Content-Type header. None (the default) sends no body, same
+              as before this parameter existed.
         timeout_seconds: HTTP request timeout in seconds.
         follow_redirects: Follow HTTP redirects to the final destination.
 
@@ -76,7 +82,7 @@ async def fetch_url(
             timeout=timeout_seconds,
             verify=False,  # allow self-signed certs during pentesting
         ) as client:
-            response = await client.request(method, url, headers=headers)
+            response = await client.request(method, url, headers=headers, content=body)
     except httpx.RequestError as exc:
         await audit.log_tool_call("fetch_url", url, params, result="failed", error=str(exc))
         return {

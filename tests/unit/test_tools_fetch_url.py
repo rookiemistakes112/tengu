@@ -130,7 +130,71 @@ class TestFetchUrl:
         cookie_headers = {"Cookie": "PHPSESSID=abc123; security=low"}
         await fetch_url(mock_ctx, "https://example.com", headers=cookie_headers)
 
-        mock_client.request.assert_awaited_once_with("GET", "https://example.com", headers=cookie_headers)
+        mock_client.request.assert_awaited_once_with(
+            "GET", "https://example.com", headers=cookie_headers, content=None
+        )
+
+    @patch("tengu.stealth.get_stealth_layer")
+    @patch("tengu.tools.web.fetch_url.make_allowlist_from_config")
+    @patch("tengu.tools.web.fetch_url.get_audit_logger")
+    async def test_body_forwarded_as_request_content(
+        self, mock_audit_fn, mock_allowlist_fn, mock_stealth_fn, mock_ctx
+    ):
+        """body is a raw pre-encoded string (e.g. a login form's
+        "username=admin&password=admin123") — sent as-is via httpx's
+        content= param, not form-encoded, so the caller controls the exact
+        bytes on the wire."""
+        mock_allowlist = MagicMock()
+        mock_allowlist.check.return_value = None
+        mock_allowlist_fn.return_value = mock_allowlist
+
+        mock_audit = AsyncMock()
+        mock_audit.log_tool_call = AsyncMock()
+        mock_audit_fn.return_value = mock_audit
+
+        mock_response = _make_response()
+        mock_stealth_layer, mock_client = _make_stealth_client_with_response(mock_response)
+        mock_stealth_fn.return_value = mock_stealth_layer
+
+        login_body = "username=admin&password=admin123"
+        await fetch_url(
+            mock_ctx, "https://example.com/login", method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            body=login_body,
+        )
+
+        mock_client.request.assert_awaited_once_with(
+            "POST", "https://example.com/login",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            content=login_body,
+        )
+
+    @patch("tengu.stealth.get_stealth_layer")
+    @patch("tengu.tools.web.fetch_url.make_allowlist_from_config")
+    @patch("tengu.tools.web.fetch_url.get_audit_logger")
+    async def test_no_body_still_works_as_before(
+        self, mock_audit_fn, mock_allowlist_fn, mock_stealth_fn, mock_ctx
+    ):
+        """Omitting body must behave exactly as it did before this param
+        existed — content=None sends no request body."""
+        mock_allowlist = MagicMock()
+        mock_allowlist.check.return_value = None
+        mock_allowlist_fn.return_value = mock_allowlist
+
+        mock_audit = AsyncMock()
+        mock_audit.log_tool_call = AsyncMock()
+        mock_audit_fn.return_value = mock_audit
+
+        mock_response = _make_response()
+        mock_stealth_layer, mock_client = _make_stealth_client_with_response(mock_response)
+        mock_stealth_fn.return_value = mock_stealth_layer
+
+        result = await fetch_url(mock_ctx, "https://example.com")
+
+        assert result["error"] is None
+        mock_client.request.assert_awaited_once_with(
+            "GET", "https://example.com", headers=None, content=None
+        )
 
     @patch("tengu.stealth.get_stealth_layer")
     @patch("tengu.tools.web.fetch_url.make_allowlist_from_config")
