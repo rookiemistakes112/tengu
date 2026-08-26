@@ -144,6 +144,27 @@ RUN if [ "$TENGU_TIER" = "core" ] || [ "$TENGU_TIER" = "full" ]; then \
             || echo "WARNING: SSRFmap install failed, skipping"; \
     fi
 
+# ── rockyou.txt (core + full): extract to the path hydra_attack's callers
+# actually use ────────────────────────────────────────────────────────────
+# The `seclists` apt package (installed above with --no-install-recommends)
+# ships rockyou.txt only as a compressed archive under its own tree
+# (Passwords/Leaked-Databases/rockyou.txt.tar.gz) — it does NOT provide
+# /usr/share/wordlists/rockyou.txt, which is the separate Kali `wordlists`
+# package's job (a postinst gunzip step), never installed here. Every
+# Hellfire agent that calls hydra_attack hardcodes that exact path as its
+# password list. Confirmed live (2026-08-26, XBEN-005-24 benchmark run):
+# hydra_attack failed on every attempt because that file simply didn't
+# exist, silently producing zero cracked credentials regardless of how
+# weak the target's real credentials were. Extracting seclists' own copy
+# to the expected path fixes every caller with no Hellfire-side change and
+# no extra apt package.
+RUN if [ "$TENGU_TIER" = "core" ] || [ "$TENGU_TIER" = "full" ]; then \
+        mkdir -p /usr/share/wordlists && \
+        tar -xzOf /usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt.tar.gz \
+            > /usr/share/wordlists/rockyou.txt \
+            || echo "WARNING: rockyou.txt extraction failed, hydra_attack's default passlist will be missing"; \
+    fi
+
 # ── Copy uv and Python virtualenv from builder ──────────────────────────────
 COPY --from=builder /root/.local/bin/uv /root/.local/bin/uv
 COPY --from=builder /root/.local/bin/uvx /root/.local/bin/uvx
