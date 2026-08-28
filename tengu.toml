@@ -13,7 +13,7 @@ audit_log_path = "./logs/tengu-audit.log"
 #   "10.0.0.1"           → exact IP match
 #
 # Tip: For bug bounty, use "*.target.com" to allow all discovered subdomains.
-allowed_hosts = ["juice-shop", "juice-shop.local", "dvwa", "dvwa.local", "172.20.0.0/16", "172.17.0.0/16", "localhost", "127.0.0.1", "localhost:3000", "dvwa.com", "ginandjuice.shop", "http", "192.168.201.129"]
+allowed_hosts = ["juice-shop", "juice-shop.local", "dvwa", "dvwa.local", "172.20.0.0/16", "172.17.0.0/16", "localhost", "127.0.0.1", "localhost:3000", "dvwa.com", "ginandjuice.shop", "http", "192.168.201.129", "172.17.0.1"]
 
 # Always blocked, even if listed in allowed_hosts
 blocked_hosts = []
@@ -43,7 +43,18 @@ wordlist_path = "/usr/share/seclists/Discovery/Web-Content/common.txt"
 
 [rate_limiting]
 max_scans_per_minute = 10
-max_concurrent_scans = 3
+# Raised from 3 -> 5 (2026-08-28): this host has 12 CPUs / ~10GB RAM, real
+# headroom for nuclei/sqlmap/ffuf (mostly network-bound, not CPU-heavy).
+# Must move in lockstep with agents/base_agent.py's
+# TENGU_MAX_CONCURRENT_PER_TOOL client-side mirror -- raising only one side
+# either self-throttles below what this server can actually handle, or
+# reintroduces the "Too many concurrent scans" retry-storm the client-side
+# gate exists to prevent. 5 covers realistic concurrent demand from Epic
+# 6's parallel-batch execution (3 agents x ~2 concurrent nuclei calls each)
+# without a large jump. Note this also controls concurrent *target*
+# traffic, not just local resource use -- reconsider before raising
+# further against a real (non-lab) engagement target.
+max_concurrent_scans = 5
 
 [cve]
 nvd_api_key = ""                      # Optional — increases NVD rate limit

@@ -43,7 +43,12 @@ password_wordlist_path = "/usr/share/seclists/Passwords/Common-Credentials/xato-
 
 [rate_limiting]
 max_scans_per_minute = 10
-max_concurrent_scans = 3
+# Kept in sync with the root tengu.toml (bind-mounted over this baked-in
+# copy at runtime via docker-compose.override.yml -- this file is what a
+# fresh image build without that override falls back to). See that file's
+# comment for the full reasoning. Must match agents/base_agent.py's
+# TENGU_MAX_CONCURRENT_PER_TOOL client-side mirror.
+max_concurrent_scans = 5
 
 [cve]
 nvd_api_key = ""                         # Optional — increases NVD rate limit
