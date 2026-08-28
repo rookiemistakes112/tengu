@@ -48,7 +48,7 @@ max_scans_per_minute = 10
 # fresh image build without that override falls back to). See that file's
 # comment for the full reasoning. Must match agents/base_agent.py's
 # TENGU_MAX_CONCURRENT_PER_TOOL client-side mirror.
-max_concurrent_scans = 5
+max_concurrent_scans = 3
 
 [cve]
 nvd_api_key = ""                         # Optional — increases NVD rate limit

@@ -43,18 +43,16 @@ wordlist_path = "/usr/share/seclists/Discovery/Web-Content/common.txt"
 
 [rate_limiting]
 max_scans_per_minute = 10
-# Raised from 3 -> 5 (2026-08-28): this host has 12 CPUs / ~10GB RAM, real
-# headroom for nuclei/sqlmap/ffuf (mostly network-bound, not CPU-heavy).
-# Must move in lockstep with agents/base_agent.py's
-# TENGU_MAX_CONCURRENT_PER_TOOL client-side mirror -- raising only one side
-# either self-throttles below what this server can actually handle, or
-# reintroduces the "Too many concurrent scans" retry-storm the client-side
-# gate exists to prevent. 5 covers realistic concurrent demand from Epic
-# 6's parallel-batch execution (3 agents x ~2 concurrent nuclei calls each)
-# without a large jump. Note this also controls concurrent *target*
-# traffic, not just local resource use -- reconsider before raising
-# further against a real (non-lab) engagement target.
-max_concurrent_scans = 5
+# Kept at 3 (2026-08-28): briefly raised to 5 for host-capacity reasons,
+# then reverted -- this engagement's client wants concurrent tool-call
+# volume against their infrastructure kept conservative, which matters
+# more here than local host headroom (this host has plenty: 12 CPUs,
+# ~10GB RAM). Must move in lockstep with agents/base_agent.py's
+# TENGU_MAX_CONCURRENT_PER_TOOL client-side mirror -- raising only one
+# side either self-throttles below what this server allows, or
+# reintroduces the "Too many concurrent scans" retry-storm the
+# client-side gate exists to prevent.
+max_concurrent_scans = 3
 
 [cve]
 nvd_api_key = ""                      # Optional — increases NVD rate limit
