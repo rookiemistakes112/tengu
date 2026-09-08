@@ -8,3 +8,6 @@ services:
   juice-shop:
     ports:
       - "3000:3000"
+  mutillidae:
+    ports:
+      - "8081:80"

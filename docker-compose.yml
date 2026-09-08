@@ -105,6 +105,47 @@ services:
           - dvwa
           - dvwa.local
 
+  # OWASP Mutillidae II (Task 3.3.1, Epic 3). Two containers, not one: unlike
+  # dvwa/juice-shop above, the official webpwnized/mutillidae image ships its
+  # web app and MySQL backend as separate images with no "latest" tag — pin
+  # exact tags (verified on Docker Hub before wiring this in). LDAP-backed
+  # challenges (a small subset) are intentionally NOT included here — that
+  # would mean a 3rd container (webpwnized/mutillidae:ldap) plus 2 volumes;
+  # skipped to keep this lab target's footprint in line with dvwa/juice-shop's
+  # single/near-single-container simplicity. The core app still starts and
+  # serves fine without it — the www image's ldap-config.inc just points at
+  # an unreachable "directory" host, which only breaks the LDAP-specific pages.
+  # Host port mapping (for a human to open it in a browser) lives in
+  # docker-compose.override.yml, same as dvwa/juice-shop's — not here.
+  mutillidae-db:
+    image: webpwnized/mutillidae:database
+    profiles:
+      - lab
+    restart: unless-stopped
+    networks:
+      tengu-net:
+        # "database" (not "mutillidae-db") is REQUIRED: the www image below
+        # has DB_HOST hardcoded to this exact hostname at build time (see
+        # webpwnized/mutillidae-docker .build/www/Dockerfile) — there is no
+        # environment variable to override it post-build. If another lab
+        # target ever needs a "database" alias on this network, they collide;
+        # none currently does.
+        aliases:
+          - database
+
+  mutillidae:
+    image: webpwnized/mutillidae:www
+    profiles:
+      - lab
+    restart: unless-stopped
+    depends_on:
+      - mutillidae-db
+    networks:
+      tengu-net:
+        aliases:
+          - mutillidae
+          - mutillidae.local
+
   # ── Tengu Autonomous Agent (profile: agent) ──────────────────────────────────
   tengu-agent:
     build:
