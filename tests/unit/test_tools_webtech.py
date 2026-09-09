@@ -190,3 +190,47 @@ class TestWhatweb:
         assert "--cookie=PHPSESSID=abc123" in result["command"]
         assert "\r" not in result["command"]
         assert "\n" not in result["command"]
+
+
+class TestWhatwebMultilineOutput:
+    """Regression: whatweb --log-json emits a JSON ARRAY pretty-printed across
+    MULTIPLE lines (opening '[' on its own line). The original parser did
+    json.loads() per line, so '[' threw and the entire result fell through to a
+    text fallback that recorded the whole JSON blob as one bogus 'technology'
+    with http_status left None. Confirmed live against whatweb 0.6.4 / Mutillidae
+    (http_status None wrongly flagged the target unreachable downstream). The
+    single-line fixtures the other tests use never exercised this."""
+
+    @pytest.mark.asyncio
+    async def test_pretty_printed_array_parses_status_and_plugins(self):
+        entry = {
+            "target": "http://mutillidae.local",
+            "http_status": 200,
+            "plugins": {
+                "Apache": {"version": ["2.4.67"], "string": []},
+                "PHP": {"version": ["8.5.7"], "string": ["PHP/8.5.7"]},
+                "HTML5": {},
+            },
+        }
+        stdout = json.dumps([entry], indent=2)  # real multi-line shape
+        assert stdout.splitlines()[0].strip() == "["
+        mocks = _make_fixtures(run_stdout=stdout)
+        result = await _call_whatweb(mocks, target="http://mutillidae.local")
+
+        assert result["http_status"] == 200
+        assert result["plugins_found"] == 3
+        by_name = {p["name"]: p for p in result["technologies"]}
+        assert by_name["Apache"]["version"] == "2.4.67"
+        assert by_name["PHP"]["version"] == "8.5.7"
+        # the whole-blob bogus technology must NOT appear
+        assert not any(t["name"].strip().startswith(("[", "{")) for t in result["technologies"])
+
+    @pytest.mark.asyncio
+    async def test_bare_object_output_also_parses(self):
+        """Defensive: some builds emit a bare object, not an array."""
+        entry = {"target": "http://t", "http_status": 200,
+                 "plugins": {"nginx": {"version": ["1.25"], "string": []}}}
+        mocks = _make_fixtures(run_stdout=json.dumps(entry))
+        result = await _call_whatweb(mocks, target="http://t")
+        assert result["http_status"] == 200
+        assert result["technologies"][0]["name"] == "nginx"

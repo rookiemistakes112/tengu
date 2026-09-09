@@ -92,29 +92,64 @@ async def whatweb_scan(
     detected_url = target
     http_status = None
 
+    def _ingest(entry: dict) -> None:
+        nonlocal detected_url, http_status
+        detected_url = entry.get("target", detected_url)
+        if entry.get("http_status") is not None:
+            http_status = entry.get("http_status")
+        plugin_data = entry.get("plugins", {})
+        if not isinstance(plugin_data, dict):
+            return
+        for plugin_name, plugin_info in plugin_data.items():
+            info = plugin_info if isinstance(plugin_info, dict) else {}
+            versions = info.get("version", [])
+            string = info.get("string", [])
+            plugins.append(
+                {
+                    "name": plugin_name,
+                    "version": versions[0] if versions else None,
+                    "detail": string[0] if string else None,
+                }
+            )
+
+    # whatweb --log-json emits a single JSON document — an ARRAY of result
+    # objects, pretty-printed across MULTIPLE lines (the opening "[" is on its
+    # own line). The old parser did json.loads() per line, so "[" threw, the
+    # whole result fell through to the text fallback (which appended the entire
+    # JSON blob as one bogus "technology"), and http_status was left None.
+    # Confirmed live against whatweb 0.6.4 / Mutillidae. Parse the whole stdout
+    # first; only then fall back.
+    parsed = False
     try:
+        data = json.loads(stdout)
+        entries = data if isinstance(data, list) else [data]
+        for entry in entries:
+            if isinstance(entry, dict):
+                _ingest(entry)
+        parsed = True
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        # Second try: JSONL (one JSON object/array per line) for whatweb builds
+        # that emit that instead of a pretty-printed array.
         for line in stdout.splitlines():
             line = line.strip()
             if not line:
                 continue
-            data = json.loads(line)
-            if isinstance(data, list) and data:
-                entry = data[0]
-                detected_url = entry.get("target", target)
-                http_status = entry.get("http_status")
-                plugin_data = entry.get("plugins", {})
-                for plugin_name, plugin_info in plugin_data.items():
-                    versions = plugin_info.get("version", [])
-                    string = plugin_info.get("string", [])
-                    plugins.append(
-                        {
-                            "name": plugin_name,
-                            "version": versions[0] if versions else None,
-                            "detail": string[0] if string else None,
-                        }
-                    )
-    except (json.JSONDecodeError, KeyError, IndexError):
-        # Fallback: parse plain text output
+            try:
+                data = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(data, list):
+                for entry in data:
+                    if isinstance(entry, dict):
+                        _ingest(entry)
+                parsed = True
+            elif isinstance(data, dict):
+                _ingest(data)
+                parsed = True
+
+    if not parsed and not plugins:
+        # Last resort: whatweb printed non-JSON (e.g. plain text) — keep the
+        # old best-effort so a fingerprint isn't lost entirely.
         for line in stdout.splitlines():
             if "[" in line and "]" in line:
                 plugins.append({"name": line.strip(), "version": None, "detail": None})
