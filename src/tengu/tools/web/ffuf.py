@@ -36,6 +36,7 @@ async def ffuf_fuzz(
     rate: int = 0,
     headers: dict[str, str] | None = None,
     timeout: int | None = None,
+    autocalibration: bool = False,
 ) -> dict:
     """Fuzz directories, files, and endpoints using FFUF.
 
@@ -59,6 +60,8 @@ async def ffuf_fuzz(
         rate: Requests per second limit (0 = unlimited).
         headers: Additional HTTP headers (e.g. {"Cookie": "session=abc123"}).
         timeout: Override scan timeout in seconds.
+        autocalibration: Enable ffuf auto-calibration (-ac) to filter wildcard/uniform
+                         responses (e.g. Apache mod_status, blanket-403 .phps handlers).
 
     Returns:
         Discovered paths/endpoints with response codes, sizes, and redirect targets.
@@ -112,6 +115,14 @@ async def ffuf_fuzz(
         codes = [str(c) for c in match_codes if 100 <= c <= 599]
         if codes:
             args.extend(["-mc", ",".join(codes)])
+
+    # Auto-calibration: ffuf sends baseline requests with dummy values, learns the
+    # target's wildcard/uniform response (e.g. mod_status returning the same page for
+    # every /server-status/* path, or a .phps handler 403ing everything) and filters
+    # matches indistinguishable from it. Without it, a wildcard-responding path turns
+    # every wordlist word into a false hit (DVWA A01: 7712 bogus findings).
+    if autocalibration:
+        args.append("-ac")
 
     if extensions:
         # Sanitize extensions — only alphanumeric and dots

@@ -410,6 +410,46 @@ class TestFfufFuzz:
     @patch("tengu.tools.web.ffuf.resolve_tool_path", return_value="/usr/bin/ffuf")
     @patch("tengu.tools.web.ffuf.rate_limited")
     @patch("tengu.stealth.get_stealth_layer")
+    async def test_ffuf_autocalibration(
+        self,
+        mock_stealth,
+        mock_rl,
+        mock_resolve,
+        mock_audit_fn,
+        mock_allowlist_fn,
+        mock_config,
+        mock_run,
+        mock_ctx,
+    ):
+        mock_config.return_value = _make_config_mock()
+        mock_allowlist = MagicMock()
+        mock_allowlist.check.return_value = None
+        mock_allowlist_fn.return_value = mock_allowlist
+        mock_audit = AsyncMock()
+        mock_audit.log_tool_call = AsyncMock()
+        mock_audit_fn.return_value = mock_audit
+        mock_rl.return_value = _make_rate_limited_mock()
+        mock_run.return_value = _make_ffuf_json_output()
+        mock_stealth_layer = MagicMock()
+        mock_stealth_layer.enabled = False
+        mock_stealth_layer.proxy_url = None
+        mock_stealth.return_value = mock_stealth_layer
+
+        # -ac is emitted only when autocalibration=True (off by default), so a
+        # wildcard-responding target can be filtered without changing every caller.
+        await ffuf_fuzz(mock_ctx, "https://example.com/FUZZ")
+        assert "-ac" not in mock_run.call_args[0][0]
+
+        await ffuf_fuzz(mock_ctx, "https://example.com/FUZZ", autocalibration=True)
+        assert "-ac" in mock_run.call_args[0][0]
+
+    @patch("tengu.tools.web.ffuf.run_command", new_callable=AsyncMock)
+    @patch("tengu.tools.web.ffuf.get_config")
+    @patch("tengu.tools.web.ffuf.make_allowlist_from_config")
+    @patch("tengu.tools.web.ffuf.get_audit_logger")
+    @patch("tengu.tools.web.ffuf.resolve_tool_path", return_value="/usr/bin/ffuf")
+    @patch("tengu.tools.web.ffuf.rate_limited")
+    @patch("tengu.stealth.get_stealth_layer")
     async def test_ffuf_threads_clamped_max(
         self,
         mock_stealth,
