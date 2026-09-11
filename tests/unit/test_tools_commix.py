@@ -128,10 +128,64 @@ class TestParseCommixOutput:
         assert len(result["evidence"]) > 0
 
     def test_case_insensitive_vulnerable(self):
-        result = _parse_commix_output("VULNERABLE parameter found")
+        # commix's real confirmation phrase, upper-cased — matching is case-insensitive.
+        result = _parse_commix_output(
+            "(GET) parameter 'ip' APPEARS TO BE INJECTABLE VIA (results-based) command injection technique."
+        )
         assert result["vulnerable"] is True
 
     def test_evidence_capped_at_20(self):
-        output = "\n".join(f"[+] evidence line {i}" for i in range(30))
+        line = "(GET) parameter 'ip' appears to be injectable via technique {i}"
+        output = "\n".join(line.format(i=i) for i in range(30))
         result = _parse_commix_output(output)
         assert len(result["evidence"]) <= 20
+
+    # --- Regression: commix v4.1 heuristic false positives (DVWA, 2026-09-11) ---
+    # The old matcher keyed on "parameter"+"injectable", which matched commix's
+    # NEGATIVE heuristic line "<param> might not be injectable" and flagged every
+    # scanned URL as vulnerable (~93% false positives against DVWA).
+
+    def test_heuristic_negative_is_not_vulnerable(self):
+        # This exact shape (minus ANSI) came back vulnerable:true for all 14 URLs.
+        line = (
+            "[warning] Heuristic (basic) tests show that GET parameter "
+            "'name' might not be injectable."
+        )
+        result = _parse_commix_output(line)
+        assert result["vulnerable"] is False
+        assert result["evidence"] == []
+
+    def test_heuristic_maybe_injectable_is_not_confirmed(self):
+        # "might be injectable" is a guess commix prints before it actually tests;
+        # only "appears to be injectable via <technique>" confirms an exploit.
+        line = (
+            "[info] Heuristic (basic) test shows that GET parameter "
+            "'ip' might be injectable (possible OS: 'Unix-like')."
+        )
+        result = _parse_commix_output(line)
+        assert result["vulnerable"] is False
+
+    def test_self_flagged_false_positive_is_not_vulnerable(self):
+        line = "[warning] False positive or unexploitable injection point has been detected."
+        result = _parse_commix_output(line)
+        assert result["vulnerable"] is False
+
+    def test_confirmed_injectable_via_is_vulnerable(self):
+        line = (
+            "[info] (GET) parameter 'ip' appears to be injectable via "
+            "(results-based) command injection technique."
+        )
+        result = _parse_commix_output(line)
+        assert result["vulnerable"] is True
+        assert len(result["evidence"]) == 1
+
+    def test_negative_amid_confirmation_still_confirms(self):
+        # A real scan prints both the early negative heuristic for other params
+        # AND the confirmation for the injectable one — the confirmation wins.
+        output = (
+            "[warning] Heuristic (basic) tests show that GET parameter 'a' might not be injectable.\n"
+            "[info] (GET) parameter 'ip' appears to be injectable via (results-based) technique.\n"
+        )
+        result = _parse_commix_output(output)
+        assert result["vulnerable"] is True
+        assert len(result["evidence"]) == 1

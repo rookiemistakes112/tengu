@@ -139,19 +139,49 @@ async def commix_scan(
     }
 
 
+# Commix v4.1 confirms an exploitable parameter with the bold-info result line
+# "<param> appears to be injectable via (<technique>) ..." (see commix
+# src/core/injections/controller/checks.py:2955 and modules/shellshock). That is
+# the ONLY line that means "a payload actually worked".
+_COMMIX_CONFIRMED = "appears to be injectable via"
+
+# Lines commix emits that contain the word "injectable" (or "vulnerable") but are
+# NOT confirmations: the heuristic negative "<param> might not be injectable"
+# (a [warning]) and commix's own self-detected false positive. An older matcher
+# that keyed on "parameter"+"injectable" matched the negative heuristic and so
+# reported EVERY scanned parameter as vulnerable — a ~93% false-positive rate
+# against DVWA (only /vulnerabilities/exec is truly command-injectable), where
+# all 14 scanned URLs came back vulnerable:true off the "might not be injectable"
+# warning alone.
+_COMMIX_NEGATIVES = (
+    "might not be injectable",
+    "not be injectable",
+    "not injectable",
+    "false positive",
+    "unexploitable injection point",
+)
+
+
 def _parse_commix_output(output: str) -> dict:
-    """Parse Commix stdout for key findings."""
+    """Parse Commix stdout for *confirmed* command-injection findings.
+
+    Match only commix's definitive confirmation and never a line it itself
+    flagged as a negative / false positive, even though those also contain the
+    word "injectable". A guarded [+] branch is kept as forward-compat in case a
+    future commix reverts to [+]-style success markers — the negative filter
+    sits above every branch so a negation can never slip through.
+    """
     evidence = []
     vulnerable = False
 
     for line in output.splitlines():
         line_lower = line.lower()
-        # Only confirmed findings count — commix startup banner contains "injection"
-        # as normal text, so matching that word alone causes universal false positives.
+        if any(neg in line_lower for neg in _COMMIX_NEGATIVES):
+            continue
         is_confirmed = (
-            ("[+]" in line and "injectable" in line_lower)
+            _COMMIX_CONFIRMED in line_lower
+            or ("[+]" in line and "injectable" in line_lower)
             or ("[+]" in line and "vulnerable" in line_lower)
-            or ("parameter" in line_lower and "injectable" in line_lower)
         )
         if is_confirmed:
             evidence.append(line.strip())
