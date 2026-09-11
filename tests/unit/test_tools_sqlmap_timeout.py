@@ -159,3 +159,42 @@ class TestSqlmapScanTimeout:
         result = await sqlmap_scan(mock_ctx, "https://example.com/?id=1")
 
         assert result["timed_out"] is False
+
+    @patch("tengu.tools.injection.sqlmap.run_command", new_callable=AsyncMock)
+    @patch("tengu.tools.injection.sqlmap.get_config")
+    @patch("tengu.tools.injection.sqlmap.make_allowlist_from_config")
+    @patch("tengu.tools.injection.sqlmap.get_audit_logger")
+    @patch("tengu.tools.injection.sqlmap.resolve_tool_path", return_value="/usr/bin/sqlmap")
+    @patch("tengu.tools.injection.sqlmap.rate_limited")
+    @patch("tengu.stealth.get_stealth_layer")
+    async def test_cookie_header_uses_cookie_flag_and_keeps_semicolons(
+        self, mock_stealth, mock_rl, mock_resolve, mock_audit_fn,
+        mock_allowlist_fn, mock_config, mock_run, mock_ctx,
+    ):
+        """A Cookie header must go through --cookie with its ';' separators intact.
+        The old code sent it via -H and stripped ';', merging
+        'PHPSESSID=x; security=low' into one broken cookie -> unauthenticated
+        session -> false-negative scans (DVWA sqli, 2026-09-11)."""
+        mock_config.return_value = _make_sqlmap_config()
+        mock_allowlist = MagicMock()
+        mock_allowlist.check.return_value = None
+        mock_allowlist_fn.return_value = mock_allowlist
+        mock_audit = AsyncMock()
+        mock_audit.log_tool_call = AsyncMock()
+        mock_audit_fn.return_value = mock_audit
+        mock_rl.return_value = _make_rate_limited_mock()
+        sl = MagicMock()
+        sl.enabled = False
+        sl.proxy_url = None
+        mock_stealth.return_value = sl
+        mock_run.return_value = ("", "", 0)
+
+        await sqlmap_scan(
+            mock_ctx, "https://example.com/?id=1",
+            headers={"Cookie": "PHPSESSID=abc123; security=low"},
+        )
+        args = mock_run.call_args[0][0]
+        assert "--cookie" in args
+        assert "PHPSESSID=abc123; security=low" in args      # ';' preserved
+        # and it was not smuggled through -H with the separator stripped
+        assert not any(a.startswith("Cookie:") and ";" not in a for a in args)

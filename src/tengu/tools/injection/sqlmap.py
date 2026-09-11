@@ -196,10 +196,22 @@ async def sqlmap_scan(
 
     if headers:
         for key, value in headers.items():
-            # Sanitize header name and value — strip shell metacharacters and newlines
-            safe_key = re.sub(r"[\r\n:;&|`$<>()\{\}\\\"']", "", key).strip()
-            safe_val = re.sub(r"[\r\n;&|`$<>()\{\}\\\"']", "", value).strip()
-            if safe_key and safe_val:
+            # CRLF is the real header-injection risk — strip only that (plus backticks),
+            # NOT ';'. The old filter stripped ';', which silently merged a multi-cookie
+            # value like "PHPSESSID=x; security=low" into one malformed cookie: the target
+            # then saw an unauthenticated / wrong-security session and sqlmap reported
+            # false negatives on obviously-injectable params (DVWA sqli, 2026-09-11).
+            # Safe because the executor never uses shell=True (args are a list, not a
+            # shell string).
+            safe_key = re.sub(r"[\r\n:]", "", key).strip()
+            safe_val = re.sub(r"[\r\n`]", "", value).strip()
+            if not (safe_key and safe_val):
+                continue
+            # Cookies belong in sqlmap's dedicated --cookie option, which keeps the ';'
+            # separators intact; everything else goes through a raw -H header.
+            if safe_key.lower() == "cookie":
+                args.extend(["--cookie", safe_val])
+            else:
                 args.extend(["-H", f"{safe_key}: {safe_val}"])
 
     if dump:
